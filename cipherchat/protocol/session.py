@@ -7,6 +7,7 @@ from cipherchat.crypto.kdf import derive_session_key
 from cipherchat.crypto.key_exchange import derive_shared_secret, load_public_key, public_key_bytes
 from cipherchat.security.attacks import verify_expected_public_key
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from .limits import MAX_CONTEXT_LENGTH, MAX_ID_LENGTH
 from .messages import ReceiverSession, SenderSession
 
 
@@ -27,6 +28,8 @@ class SessionManager:
     """
     def __init__(self, identity: Identity, peer_id: str, expected_peer_public_key: bytes,
                  expected_peer_signing_public_key: bytes):
+        if not isinstance(peer_id, str) or not peer_id or len(peer_id) > MAX_ID_LENGTH:
+            raise ValueError(f"peer_id must be non-empty string <= {MAX_ID_LENGTH} characters")
         self.identity = identity
         self.peer_id = peer_id
         self.expected_peer_public_key = expected_peer_public_key
@@ -37,6 +40,10 @@ class SessionManager:
 
     def establish(self, presented_peer_public_key: bytes, presented_peer_signing_public_key: bytes,
                   *, session_id: str, context: bytes) -> SessionInfo:
+        if not isinstance(session_id, str) or not session_id or len(session_id) > MAX_ID_LENGTH:
+            raise ValueError(f"session_id must be non-empty string <= {MAX_ID_LENGTH} characters")
+        if not isinstance(context, bytes) or not context or len(context) > MAX_CONTEXT_LENGTH:
+            raise ValueError(f"context must be non-empty bytes <= {MAX_CONTEXT_LENGTH} bytes")
         verify_expected_public_key(self.expected_peer_public_key, presented_peer_public_key)
         verify_expected_public_key(self.expected_peer_signing_public_key, presented_peer_signing_public_key)
         peer_public_key = load_public_key(presented_peer_public_key)

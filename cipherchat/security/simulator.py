@@ -4,8 +4,9 @@ Run all scenarios with ``python -m cipherchat.security.simulator``.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from dataclasses import replace
+import json
+from dataclasses import asdict, dataclass, replace
+from pathlib import Path
 from typing import Literal
 
 from cipherchat.crypto.identity import Identity
@@ -60,6 +61,41 @@ class SimulationMetrics:
 class SimulationReport:
     results: tuple[AttackResult, ...]
     metrics: SimulationMetrics
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "format": "cipherchat-simulation-report-v1",
+            "metrics": asdict(self.metrics),
+            "results": [
+                {
+                    "attack_type": r.attack_type.value,
+                    "detected": r.detected,
+                    "classification": r.classification.value,
+                    "session_id": r.session_id,
+                    "message_id": r.message_id,
+                    "sequence_number": r.sequence_number,
+                    "evidence_generated": r.evidence_generated,
+                    "evidence_hash": r.evidence_hash,
+                    "checkpoint_valid": r.checkpoint_valid,
+                    "recovery_state": r.recovery_state.value,
+                    "recovery_history": [s.value for s in r.recovery_history],
+                    "recovered": r.recovered,
+                    "rekeyed": r.rekeyed,
+                    "old_session_invalidated": r.old_session_invalidated,
+                    "detail": r.detail,
+                }
+                for r in self.results
+            ],
+        }
+
+    def to_json(self, indent: int = 2) -> str:
+        return json.dumps(self.to_dict(), indent=indent, sort_keys=True)
+
+    def export_json(self, path: Path | str, indent: int = 2) -> Path:
+        out_path = Path(path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(self.to_json(indent=indent), encoding="utf-8")
+        return out_path
 
 
 @dataclass
@@ -250,6 +286,11 @@ def main() -> None:
     print("\n" + "=" * 50 + "\nSimulation Complete")
     print(f"Attacks: {metrics.total_attacks}; detected: {metrics.attacks_detected}; missed: {metrics.attacks_missed}")
     print(f"Detection rate: {metrics.detection_rate:.0%}; recovery success rate: {metrics.recovery_success_rate:.0%}")
+    out_dir = Path("security_test_results")
+    if out_dir.exists():
+        json_path = out_dir / "attack_simulation.json"
+        report.export_json(json_path)
+        print(f"JSON LOG:       {json_path}")
 
 
 if __name__ == "__main__":

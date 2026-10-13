@@ -8,11 +8,21 @@ from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from time import perf_counter_ns
 from urllib.parse import urlparse
 from uuid import uuid4
 
 from cipherchat.crypto.identity import Identity
 from cipherchat.crypto.key_exchange import public_key_bytes
+from cipherchat.protocol.limits import (
+    MAX_CONTEXT_LENGTH,
+    MAX_CIPHERTEXT_SIZE,
+    MAX_ID_LENGTH,
+    MAX_JSON_MESSAGE_SIZE,
+    MAX_REQUEST_BODY_SIZE,
+    MAX_PLAINTEXT_SIZE,
+)
+from cipherchat.protocol.messages import ProtocolError
 from cipherchat.protocol.session import SessionManager
 from cipherchat.security.evidence import EvidenceLog, verify_evidence_chain
 from cipherchat.security.simulator import AttackSimulator
@@ -98,11 +108,45 @@ class DemonstrationController:
             "events": [asdict(event) for event in self.events],
         }
 
+    def export_logs(self) -> dict[str, object]:
+        """Export comprehensive demonstration audit logs in JSON format."""
+        sender = self.alice_sessions.sender if self.alice_sessions else None
+        checkpoint = self.evidence.checkpoint()
+        return {
+            "format": "cipherchat-demonstration-logs-v1",
+            "exported_at": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+            "session_id": self.session_id,
+            "system_limits": {
+                "max_plaintext_size": MAX_PLAINTEXT_SIZE,
+                "max_ciphertext_size": MAX_CIPHERTEXT_SIZE,
+                "max_request_body_size": MAX_REQUEST_BODY_SIZE,
+                "max_json_message_size": MAX_JSON_MESSAGE_SIZE,
+                "max_id_length": MAX_ID_LENGTH,
+                "max_context_length": MAX_CONTEXT_LENGTH,
+            },
+            "session": {
+                "session_id": self.session_id, "key_exchange": "X25519", "kdf": "HKDF-SHA-256",
+                "encryption": "AES-256-GCM", "session_key": sender.key.hex() if sender else None,
+                "alice_public_key": public_key_bytes(self.alice.public_key).hex() if self.alice else None,
+                "bob_public_key": public_key_bytes(self.bob.public_key).hex() if self.bob else None,
+                "alice_signing_public_key": self.alice.signing_public_key_bytes.hex() if self.alice else None,
+                "bob_signing_public_key": self.bob.signing_public_key_bytes.hex() if self.bob else None,
+            },
+            "deliveries": self.deliveries,
+            "evidence": self.evidence.to_dict(),
+            "events": [asdict(event) for event in self.events],
+        }
+
     def send(self, plaintext: str, sender_id: str = "alice") -> dict[str, object]:
         if not isinstance(plaintext, str) or not plaintext.strip():
             raise ValueError("message must not be empty")
+        encoded_pt = plaintext.encode("utf-8")
+        if len(encoded_pt) > MAX_PLAINTEXT_SIZE:
+            raise ValueError(f"message size ({len(encoded_pt)} bytes) exceeds maximum limit of {MAX_PLAINTEXT_SIZE} bytes")
         if sender_id not in {"alice", "bob"}:
             raise ValueError("sender must be alice or bob")
+        if len(sender_id) > MAX_ID_LENGTH:
+            raise ValueError(f"sender exceeds maximum length of {MAX_ID_LENGTH} characters")
         assert self.alice_sessions and self.bob_sessions
         if sender_id == "alice":
             sender, receiver = self.alice_sessions.sender, self.bob_sessions.receiver
@@ -139,6 +183,8 @@ class DemonstrationController:
         return {**self.snapshot(), "message": message.to_dict(), "plaintext": accepted}
 
     def attack(self, name: str) -> dict[str, object]:
+        if not isinstance(name, str) or len(name) > MAX_ID_LENGTH:
+            raise ValueError("unsupported attack")
         simulator = AttackSimulator()
         if name == "replay": result = simulator.simulate_replay()
         elif name == "key_substitution": result = simulator.simulate_key_substitution()
@@ -180,28 +226,91 @@ class DemonstrationController:
 
 class _Handler(SimpleHTTPRequestHandler):
     controller = DemonstrationController()
+    audit_logs: list[dict[str, object]] = []
+
+    def _log_request_json(self, method: str, path: str, status_code: int, duration_ms: float, client_ip: str, error: str | None = None) -> None:
+        self.audit_logs.append({
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+            "method": method,
+            "path": path,
+            "status_code": int(status_code),
+            "duration_ms": round(duration_ms, 3),
+            "client_ip": client_ip,
+            "error": error,
+        })
 
     def do_GET(self) -> None:
+        start_time = perf_counter_ns()
         parsed = urlparse(self.path)
+        client_ip = self.client_address[0] if self.client_address else "unknown"
         if parsed.path == "/api/state":
-            self._json(self.controller.snapshot()); return
+            self._json(self.controller.snapshot())
+            self._log_request_json("GET", parsed.path, HTTPStatus.OK, (perf_counter_ns() - start_time) / 1_000_000, client_ip)
+            return
         if parsed.path == "/api/reset":
-            self._json(self.controller.establish()); return
+            self._json(self.controller.establish())
+            self._log_request_json("GET", parsed.path, HTTPStatus.OK, (perf_counter_ns() - start_time) / 1_000_000, client_ip)
+            return
+        if parsed.path == "/api/logs":
+            self._json(self.controller.export_logs())
+            self._log_request_json("GET", parsed.path, HTTPStatus.OK, (perf_counter_ns() - start_time) / 1_000_000, client_ip)
+            return
+        if parsed.path == "/api/audit-logs":
+            self._json({"audit_logs": self.audit_logs})
+            self._log_request_json("GET", parsed.path, HTTPStatus.OK, (perf_counter_ns() - start_time) / 1_000_000, client_ip)
+            return
         if parsed.path == "/":
             self.path = "/index.html"
         return super().do_GET()
 
     def do_POST(self) -> None:
+        start_time = perf_counter_ns()
         parsed = urlparse(self.path)
+        client_ip = self.client_address[0] if self.client_address else "unknown"
+
+        content_length_str = self.headers.get("Content-Length")
+        if content_length_str is None:
+            self._json({"error": "Content-Length header required"}, status=HTTPStatus.LENGTH_REQUIRED)
+            self._log_request_json("POST", parsed.path, HTTPStatus.LENGTH_REQUIRED, (perf_counter_ns() - start_time) / 1_000_000, client_ip, "missing Content-Length")
+            return
+
         try:
-            length = int(self.headers.get("Content-Length", "0"))
-            payload = json.loads(self.rfile.read(length) or b"{}")
-            if parsed.path == "/api/send": response = self.controller.send(payload.get("message", ""), payload.get("sender", "alice"))
-            elif parsed.path == "/api/attack": response = self.controller.attack(payload.get("attack", ""))
-            else: self.send_error(HTTPStatus.NOT_FOUND); return
+            length = int(content_length_str)
+            if length < 0:
+                raise ValueError("Negative Content-Length")
+        except ValueError:
+            self._json({"error": "invalid Content-Length"}, status=HTTPStatus.BAD_REQUEST)
+            self._log_request_json("POST", parsed.path, HTTPStatus.BAD_REQUEST, (perf_counter_ns() - start_time) / 1_000_000, client_ip, "invalid Content-Length")
+            return
+
+        if length > MAX_REQUEST_BODY_SIZE:
+            self._json(
+                {"error": f"request body size ({length} bytes) exceeds maximum limit of {MAX_REQUEST_BODY_SIZE} bytes"},
+                status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+            )
+            self._log_request_json("POST", parsed.path, HTTPStatus.REQUEST_ENTITY_TOO_LARGE, (perf_counter_ns() - start_time) / 1_000_000, client_ip, "request body too large")
+            return
+
+        try:
+            body_bytes = self.rfile.read(length) if length > 0 else b"{}"
+            payload = json.loads(body_bytes or b"{}")
+            if not isinstance(payload, dict):
+                raise ValueError("request payload must be a JSON object")
+
+            if parsed.path == "/api/send":
+                response = self.controller.send(payload.get("message", ""), payload.get("sender", "alice"))
+            elif parsed.path == "/api/attack":
+                response = self.controller.attack(payload.get("attack", ""))
+            else:
+                self.send_error(HTTPStatus.NOT_FOUND)
+                self._log_request_json("POST", parsed.path, HTTPStatus.NOT_FOUND, (perf_counter_ns() - start_time) / 1_000_000, client_ip, "endpoint not found")
+                return
+
             self._json(response)
-        except (ValueError, json.JSONDecodeError) as error:
+            self._log_request_json("POST", parsed.path, HTTPStatus.OK, (perf_counter_ns() - start_time) / 1_000_000, client_ip)
+        except (ValueError, json.JSONDecodeError, ProtocolError) as error:
             self._json({"error": str(error)}, status=HTTPStatus.BAD_REQUEST)
+            self._log_request_json("POST", parsed.path, HTTPStatus.BAD_REQUEST, (perf_counter_ns() - start_time) / 1_000_000, client_ip, str(error))
 
     def _json(self, payload: dict[str, object], status: HTTPStatus = HTTPStatus.OK) -> None:
         body = json.dumps(payload).encode("utf-8")

@@ -4,6 +4,7 @@ from uuid import uuid4
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
+from cipherchat.protocol.limits import MAX_ID_LENGTH
 from .key_exchange import generate_private_key, public_key_bytes
 
 
@@ -13,8 +14,14 @@ class Identity:
     private_key: X25519PrivateKey
     signing_private_key: Ed25519PrivateKey
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.identity_id, str) or not self.identity_id or len(self.identity_id) > MAX_ID_LENGTH:
+            raise ValueError(f"identity_id must be non-empty string <= {MAX_ID_LENGTH} characters")
+
     @classmethod
     def create(cls, identity_id: str | None = None) -> "Identity":
+        if identity_id is not None and (not isinstance(identity_id, str) or len(identity_id) > MAX_ID_LENGTH):
+            raise ValueError(f"identity_id must be <= {MAX_ID_LENGTH} characters")
         return cls(identity_id or str(uuid4()), generate_private_key(), Ed25519PrivateKey.generate())
 
     @property

@@ -328,6 +328,50 @@ def write_jsonl(report: EvaluationReport, path: Path) -> None:
             handle.write(json.dumps(record, sort_keys=True) + "\n")
 
 
+def write_json(report: EvaluationReport, path: Path, indent: int = 2) -> None:
+    """Store complete evaluation audit log in JSON format with all relevant details."""
+    from cipherchat.protocol.limits import (
+        MAX_CONTEXT_LENGTH,
+        MAX_CIPHERTEXT_SIZE,
+        MAX_ID_LENGTH,
+        MAX_JSON_MESSAGE_SIZE,
+        MAX_REQUEST_BODY_SIZE,
+        MAX_PLAINTEXT_SIZE,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "report_format": "cipherchat-security-evaluation-v1",
+        "generated_at": report.generated_at,
+        "overall_status": report.overall_status,
+        "counts": report.counts,
+        "sample_size": report.sample_size,
+        "environment": report.environment,
+        "system_limits": {
+            "max_plaintext_size": MAX_PLAINTEXT_SIZE,
+            "max_ciphertext_size": MAX_CIPHERTEXT_SIZE,
+            "max_request_body_size": MAX_REQUEST_BODY_SIZE,
+            "max_json_message_size": MAX_JSON_MESSAGE_SIZE,
+            "max_id_length": MAX_ID_LENGTH,
+            "max_context_length": MAX_CONTEXT_LENGTH,
+        },
+        "results": [
+            {
+                "case_id": item.case_id,
+                "security_property": item.security_property,
+                "status": item.status,
+                "objective": item.objective,
+                "expected": item.expected,
+                "observed": item.observed,
+                "duration_ms": item.duration_ms,
+                "metrics": item.metrics,
+                "interpretation": item.interpretation,
+            }
+            for item in report.results
+        ],
+    }
+    path.write_text(json.dumps(payload, indent=indent, sort_keys=True), encoding="utf-8")
+
+
 def _metric_text(metrics: dict[str, int | float | bool | str]) -> str:
     values = []
     for key, value in metrics.items():
@@ -339,7 +383,7 @@ def _metric_text(metrics: dict[str, int | float | bool | str]) -> str:
     return "; ".join(values)
 
 
-def print_terminal_report(report: EvaluationReport, markdown_path: Path, jsonl_path: Path) -> None:
+def print_terminal_report(report: EvaluationReport, markdown_path: Path, jsonl_path: Path, json_path: Path | None = None) -> None:
     """Print a self-contained explanation suitable for a live evaluation."""
     counts = report.counts
     width = 78
@@ -388,12 +432,14 @@ def print_terminal_report(report: EvaluationReport, markdown_path: Path, jsonl_p
         "                 private keys and public-key provisioning."
     )
     print(f"READABLE REPORT: {markdown_path}")
+    if json_path is not None:
+        print(f"JSON AUDIT LOG : {json_path}")
     print(f"JSONL AUDIT LOG: {jsonl_path}")
     print("No plaintext, private keys, session keys, or shared secrets are logged.")
     print("=" * width)
 
 
-def write_markdown(report: EvaluationReport, path: Path, jsonl_name: str) -> None:
+def write_markdown(report: EvaluationReport, path: Path, jsonl_name: str, json_name: str = "security_evaluation.json") -> None:
     counts = report.counts
     rows = "\n".join(
         f"| {item.case_id} | {item.security_property} | {item.status} | {item.observed} |"
@@ -448,8 +494,8 @@ pinning still depends on trusted out-of-band provisioning, evidence checkpoints
 must be stored separately, and application-level authorization is outside the
 prototype.
 
-The machine-readable per-case log is `{jsonl_name}`. It stores outcomes and
-metrics only; no plaintext, private key, session key, or shared secret is logged.
+The machine-readable logs are `{json_name}` (JSON audit log) and `{jsonl_name}` (per-case JSON Lines).
+They store outcomes and metrics only; no plaintext, private key, session key, or shared secret is logged.
 """
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
@@ -462,10 +508,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     report = run_evaluation(args.sample_size)
     jsonl_path = args.output_dir / "security_evaluation.jsonl"
+    json_path = args.output_dir / "security_evaluation.json"
     markdown_path = args.output_dir / "SECURITY_TEST_REPORT.md"
     write_jsonl(report, jsonl_path)
-    write_markdown(report, markdown_path, jsonl_path.name)
-    print_terminal_report(report, markdown_path, jsonl_path)
+    write_json(report, json_path)
+    write_markdown(report, markdown_path, jsonl_path.name, json_name=json_path.name)
+    print_terminal_report(report, markdown_path, jsonl_path, json_path)
     return 1 if report.counts["FAIL"] else 0
 
 

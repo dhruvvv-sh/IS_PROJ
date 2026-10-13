@@ -6,13 +6,21 @@ from uuid import uuid4
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from cipherchat.crypto.encryption import Ciphertext, decrypt, encrypt
+from cipherchat.protocol.limits import (
+    MAX_CONTEXT_LENGTH,
+    MAX_CIPHERTEXT_SIZE,
+    MAX_ID_LENGTH,
+    MAX_JSON_MESSAGE_SIZE,
+    MAX_JSON_REQUEST_SIZE,
+    MAX_PLAINTEXT_SIZE,
+)
 
 PROTOCOL_VERSION = 2
 
 
 class ProtocolError(Exception): pass
 class ReplayError(ProtocolError): pass
-class ValidationError(ProtocolError): pass
+class ValidationError(ProtocolError, ValueError): pass
 class SessionInactiveError(ProtocolError): pass
 class DigitalSignatureError(ProtocolError): pass
 
@@ -65,6 +73,12 @@ class EncryptedMessage:
 
     @classmethod
     def from_json(cls, raw: str) -> "EncryptedMessage":
+        if not isinstance(raw, str):
+            raise ValidationError("raw message must be a string")
+        if len(raw.encode("utf-8")) > MAX_JSON_MESSAGE_SIZE:
+            raise ValidationError(
+                f"message JSON size ({len(raw.encode('utf-8'))} bytes) exceeds maximum limit of {MAX_JSON_MESSAGE_SIZE} bytes"
+            )
         try:
             value = json.loads(raw)
         except (TypeError, json.JSONDecodeError) as error:
@@ -81,18 +95,30 @@ class EncryptedMessage:
     def validate(self) -> None:
         if self.protocol_version != PROTOCOL_VERSION or not all(isinstance(x, str) and x for x in (self.session_id, self.sender_id, self.message_id)):
             raise ValidationError("invalid protocol metadata")
+        if any(len(x) > MAX_ID_LENGTH for x in (self.session_id, self.sender_id, self.message_id)):
+            raise ValidationError(f"identifier length exceeds maximum allowed limit of {MAX_ID_LENGTH} characters")
         if isinstance(self.sequence_number, bool) or not isinstance(self.sequence_number, int) or self.sequence_number < 1:
             raise ValidationError("sequence_number must be a positive integer")
         if not all(isinstance(value, bytes) for value in (self.nonce, self.ciphertext, self.signature)):
             raise ValidationError("encrypted payload fields must be bytes")
         if len(self.nonce) != 12 or len(self.ciphertext) < 16 or len(self.signature) != 64:
             raise ValidationError("invalid encrypted payload")
+        if len(self.ciphertext) > MAX_CIPHERTEXT_SIZE:
+            raise ValidationError(
+                f"ciphertext size ({len(self.ciphertext)} bytes) exceeds maximum limit of {MAX_CIPHERTEXT_SIZE} bytes"
+            )
 
 
 class SenderSession:
-    def __init__(self, key: bytes, session_id: str, sender_id: str, signing_key: Ed25519PrivateKey):
+    def __init__(self, key: bytes, session_id: str, sender_id: str, signing_key: Ed25519PrivateKey,
+                 max_plaintext_size: int = MAX_PLAINTEXT_SIZE):
+        if not isinstance(session_id, str) or not session_id or len(session_id) > MAX_ID_LENGTH:
+            raise ValidationError(f"session_id must be non-empty string <= {MAX_ID_LENGTH} characters")
+        if not isinstance(sender_id, str) or not sender_id or len(sender_id) > MAX_ID_LENGTH:
+            raise ValidationError(f"sender_id must be non-empty string <= {MAX_ID_LENGTH} characters")
         self.key, self.session_id, self.sender_id, self._next_sequence = key, session_id, sender_id, 1
         self.signing_key = signing_key
+        self.max_plaintext_size = max_plaintext_size
         self._active = True
 
     def invalidate(self) -> None:
@@ -102,10 +128,16 @@ class SenderSession:
     def encrypt(self, plaintext: str) -> EncryptedMessage:
         if not self._active:
             raise SessionInactiveError("session has been invalidated")
-        if not isinstance(plaintext, str): raise TypeError("plaintext must be str")
+        if not isinstance(plaintext, str):
+            raise TypeError("plaintext must be str")
+        plaintext_bytes = plaintext.encode("utf-8")
+        if len(plaintext_bytes) > self.max_plaintext_size:
+            raise ValidationError(
+                f"plaintext size ({len(plaintext_bytes)} bytes) exceeds maximum limit of {self.max_plaintext_size} bytes"
+            )
         msg_id, seq = str(uuid4()), self._next_sequence
         provisional = EncryptedMessage(PROTOCOL_VERSION, self.session_id, self.sender_id, msg_id, seq, b"", b"", b"")
-        payload = encrypt(self.key, plaintext.encode("utf-8"), provisional.aad())
+        payload = encrypt(self.key, plaintext_bytes, provisional.aad())
         self._next_sequence += 1
         unsigned = EncryptedMessage(PROTOCOL_VERSION, self.session_id, self.sender_id, msg_id, seq, payload.nonce, payload.data, b"")
         return EncryptedMessage(PROTOCOL_VERSION, self.session_id, self.sender_id, msg_id, seq,
@@ -115,6 +147,10 @@ class SenderSession:
 class ReceiverSession:
     """Strict in-order receiver. Production transports often need a sliding window."""
     def __init__(self, key: bytes, session_id: str, expected_sender_id: str, signing_public_key: Ed25519PublicKey):
+        if not isinstance(session_id, str) or not session_id or len(session_id) > MAX_ID_LENGTH:
+            raise ValidationError(f"session_id must be non-empty string <= {MAX_ID_LENGTH} characters")
+        if not isinstance(expected_sender_id, str) or not expected_sender_id or len(expected_sender_id) > MAX_ID_LENGTH:
+            raise ValidationError(f"expected_sender_id must be non-empty string <= {MAX_ID_LENGTH} characters")
         self.key, self.session_id, self.expected_sender_id, self.highest_sequence = key, session_id, expected_sender_id, 0
         self.signing_public_key = signing_public_key
         self._seen_message_ids: set[str] = set()
