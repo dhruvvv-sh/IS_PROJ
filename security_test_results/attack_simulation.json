@@ -1,20 +1,5 @@
 {
-  "format": "cipherchat-simulation-report-v1",
-  "metrics": {
-    "attacks_detected": 8,
-    "attacks_missed": 0,
-    "blocked_sessions": 1,
-    "detection_rate": 1.0,
-    "evidence_records_generated": 8,
-    "key_substitutions": 1,
-    "recovery_success_rate": 0.875,
-    "rekeys_performed": 7,
-    "replay_attacks": 1,
-    "successful_recoveries": 7,
-    "tampering_attacks": 6,
-    "total_attacks": 8
-  },
-  "results": [
+  "attacks": [
     {
       "attack_type": "REPLAY",
       "checkpoint_valid": true,
@@ -22,10 +7,9 @@
       "detail": "ReplayError",
       "detected": true,
       "evidence_generated": true,
-      "evidence_hash": "0c25df548bd9f2b7d1931b02a18ceb55dbf2552fd0365aef8c75000b559e77e7",
-      "message_id": "e0182d96-6740-4b9c-9850-f9741728f436",
+      "evidence_hash": "03b241cf1873e47e299a3ff87b489db2e3dcaaabce6e956eaaf6ada5dfa7520e",
+      "message_id": "6fdb705c-f4dd-46f7-9476-91ff5e11e907",
       "old_session_invalidated": true,
-      "recovered": true,
       "recovery_history": [
         "SECURE",
         "SUSPECTED_ATTACK",
@@ -37,7 +21,9 @@
       "recovery_state": "SECURE",
       "rekeyed": true,
       "sequence_number": 1,
-      "session_id": "simulation-replay"
+      "session_id": "simulation-replay",
+      "simulator_evidence_hash": "db7de08a225d1e2e39b476636467390172fbe5261b1981536d5d5762245670be",
+      "timestamp": "2026-10-13T05:04:21.490+00:00"
     },
     {
       "attack_type": "TAMPERING",
@@ -46,10 +32,9 @@
       "detail": "DigitalSignatureError",
       "detected": true,
       "evidence_generated": true,
-      "evidence_hash": "00ba4c1e05a64f06291ec8d1c0243b833e9ce9defdeaa5b18382fe095fcc3a00",
-      "message_id": "f850ae7d-5b2f-4919-9996-be0cb05053ca",
+      "evidence_hash": "78bf08fe76130fa878271a64c6954b23e36e402584b35e816dd13b6c37a0e6cc",
+      "message_id": "e0cfdace-4170-465d-9a7d-4da2c881096e",
       "old_session_invalidated": true,
-      "recovered": true,
       "recovery_history": [
         "SECURE",
         "SUSPECTED_ATTACK",
@@ -61,150 +46,616 @@
       "recovery_state": "SECURE",
       "rekeyed": true,
       "sequence_number": 1,
-      "session_id": "simulation-tampering-ciphertext"
-    },
-    {
-      "attack_type": "TAMPERING",
-      "checkpoint_valid": true,
-      "classification": "TAMPERING",
-      "detail": "DigitalSignatureError",
-      "detected": true,
-      "evidence_generated": true,
-      "evidence_hash": "e07745bda310bb764623c0b47624066e306c72a046b7a4064906f6b0bf9e19ec",
-      "message_id": "58354317-916e-4e4d-9656-e77c9bde50df",
-      "old_session_invalidated": true,
-      "recovered": true,
-      "recovery_history": [
-        "SECURE",
-        "SUSPECTED_ATTACK",
-        "QUARANTINED",
-        "VERIFYING",
-        "REKEYING",
-        "SECURE"
-      ],
-      "recovery_state": "SECURE",
-      "rekeyed": true,
-      "sequence_number": 1,
-      "session_id": "simulation-tampering-nonce"
-    },
-    {
-      "attack_type": "TAMPERING",
-      "checkpoint_valid": true,
-      "classification": "TAMPERING",
-      "detail": "DigitalSignatureError",
-      "detected": true,
-      "evidence_generated": true,
-      "evidence_hash": "1b9714e9f421ae31776ae3a5c2ef8957b3d11dd86911859d91570f8a8cbfed92",
-      "message_id": "c7dd3cf4-6ea1-4a08-9347-a7cabb6ad92f",
-      "old_session_invalidated": true,
-      "recovered": true,
-      "recovery_history": [
-        "SECURE",
-        "SUSPECTED_ATTACK",
-        "QUARANTINED",
-        "VERIFYING",
-        "REKEYING",
-        "SECURE"
-      ],
-      "recovery_state": "SECURE",
-      "rekeyed": true,
-      "sequence_number": 2,
-      "session_id": "simulation-tampering-sequence_number"
-    },
-    {
-      "attack_type": "TAMPERING",
-      "checkpoint_valid": true,
-      "classification": "TAMPERING",
-      "detail": "DigitalSignatureError",
-      "detected": true,
-      "evidence_generated": true,
-      "evidence_hash": "4f06629c41f8550cbdba5ac0b479160676d84b5b165b2486f69ef977c1677dad",
-      "message_id": "tampered-message-id",
-      "old_session_invalidated": true,
-      "recovered": true,
-      "recovery_history": [
-        "SECURE",
-        "SUSPECTED_ATTACK",
-        "QUARANTINED",
-        "VERIFYING",
-        "REKEYING",
-        "SECURE"
-      ],
-      "recovery_state": "SECURE",
-      "rekeyed": true,
-      "sequence_number": 1,
-      "session_id": "simulation-tampering-message_id"
-    },
-    {
-      "attack_type": "TAMPERING",
-      "checkpoint_valid": true,
-      "classification": "TAMPERING",
-      "detail": "DigitalSignatureError",
-      "detected": true,
-      "evidence_generated": true,
-      "evidence_hash": "c7e9b9c10011cc812da9f0b1acb7b4a5e264ba30f666fd56aec5416ff5add6ff",
-      "message_id": "3453a9eb-6741-4602-b563-12c5c1572648",
-      "old_session_invalidated": true,
-      "recovered": true,
-      "recovery_history": [
-        "SECURE",
-        "SUSPECTED_ATTACK",
-        "QUARANTINED",
-        "VERIFYING",
-        "REKEYING",
-        "SECURE"
-      ],
-      "recovery_state": "SECURE",
-      "rekeyed": true,
-      "sequence_number": 1,
-      "session_id": "simulation-tampering-session_id"
-    },
-    {
-      "attack_type": "TAMPERING",
-      "checkpoint_valid": true,
-      "classification": "TAMPERING",
-      "detail": "DigitalSignatureError",
-      "detected": true,
-      "evidence_generated": true,
-      "evidence_hash": "93ae830c2b266a5727e714b7a2e713c978c1a7ecab6abe9a4cbd357ed19381fa",
-      "message_id": "d28a7f1f-8d69-4e30-a1be-78b01dd57846",
-      "old_session_invalidated": true,
-      "recovered": true,
-      "recovery_history": [
-        "SECURE",
-        "SUSPECTED_ATTACK",
-        "QUARANTINED",
-        "VERIFYING",
-        "REKEYING",
-        "SECURE"
-      ],
-      "recovery_state": "SECURE",
-      "rekeyed": true,
-      "sequence_number": 1,
-      "session_id": "simulation-tampering-sender_id"
-    },
-    {
-      "attack_type": "KEY_SUBSTITUTION",
-      "checkpoint_valid": true,
-      "classification": "KEY_SUBSTITUTION",
-      "detail": "KeySubstitutionError",
-      "detected": true,
-      "evidence_generated": true,
-      "evidence_hash": "92faa6c72661c3f3accfb696b13d2b97c3708b4990a52959294a2af21b76ade8",
-      "message_id": null,
-      "old_session_invalidated": false,
-      "recovered": false,
-      "recovery_history": [
-        "SECURE",
-        "SUSPECTED_ATTACK",
-        "QUARANTINED",
-        "VERIFYING",
-        "BLOCKED"
-      ],
-      "recovery_state": "BLOCKED",
-      "rekeyed": false,
-      "sequence_number": null,
-      "session_id": "simulation-key-substitution"
+      "session_id": "simulation-tampering-ciphertext",
+      "simulator_evidence_hash": "1517da018c3d42d0215fb9edc2d19de6109da0167d3e67dc3bb16d102c5ce7fe",
+      "timestamp": "2026-10-13T05:04:45.407+00:00"
     }
-  ]
+  ],
+  "deliveries": [
+    {
+      "aad_sha256": "e424b97e82469658086ff974a8e970cff0e2dafcf0a673d5b2adab03baf386c6",
+      "envelope_sha256": "6de861d6545525ff45f64944d522c0ab2915bd8f471c0e94b5b6f0fd6a105ce5",
+      "message_id": "321d041e-c592-432d-abb0-a5486ab7f746",
+      "plaintext": "hi",
+      "recipient": "bob",
+      "sender": "alice",
+      "sequence_number": 1,
+      "session_id": "27e4ddc2-f1a5-432e-af95-ef0c265d473e",
+      "signature": "i2yQ108YQ/NxYWtoJGBtV1RgLKhS8zJbE6KsrHg5e6zRQfXnvqgEoyJvelQISFjmxirDcwocj7Mp9VcJNs3TDw==",
+      "signature_verified": true,
+      "timestamp": "2026-10-13T05:04:17.041+00:00",
+      "wire_message": {
+        "ciphertext": "LaWWJ8coNKnqlldJJATvl3Wf",
+        "message_id": "321d041e-c592-432d-abb0-a5486ab7f746",
+        "nonce": "HZIRzQ1F+wlNm9Zq",
+        "protocol_version": 2,
+        "sender_id": "alice",
+        "sequence_number": 1,
+        "session_id": "27e4ddc2-f1a5-432e-af95-ef0c265d473e",
+        "signature": "i2yQ108YQ/NxYWtoJGBtV1RgLKhS8zJbE6KsrHg5e6zRQfXnvqgEoyJvelQISFjmxirDcwocj7Mp9VcJNs3TDw=="
+      }
+    },
+    {
+      "aad_sha256": "6596063554e2e75e6edec00bf051821dc81972734d2e2b00f2fb6f7d7c25330f",
+      "envelope_sha256": "8d0a77882c234b2e3a5cf2bf1fcce8d5245278693601d4a36beea8df95d3c5d2",
+      "message_id": "52f26e0a-d377-4f0e-a15b-44ffcd4e96c1",
+      "plaintext": "hi",
+      "recipient": "alice",
+      "sender": "bob",
+      "sequence_number": 1,
+      "session_id": "27e4ddc2-f1a5-432e-af95-ef0c265d473e",
+      "signature": "YSgKWL7dN7kUhISbSCa1YaDZcwFH8Lw5jgxyeAahU+Kjv3hA+bkcxhucR0acYFpt4+tVsA5GfsMYmAbioguDCg==",
+      "signature_verified": true,
+      "timestamp": "2026-10-13T05:04:19.770+00:00",
+      "wire_message": {
+        "ciphertext": "lLXvnw121iNU+aopWcwpiWgi",
+        "message_id": "52f26e0a-d377-4f0e-a15b-44ffcd4e96c1",
+        "nonce": "DuDgiJDj0/q30Uat",
+        "protocol_version": 2,
+        "sender_id": "bob",
+        "sequence_number": 1,
+        "session_id": "27e4ddc2-f1a5-432e-af95-ef0c265d473e",
+        "signature": "YSgKWL7dN7kUhISbSCa1YaDZcwFH8Lw5jgxyeAahU+Kjv3hA+bkcxhucR0acYFpt4+tVsA5GfsMYmAbioguDCg=="
+      }
+    }
+  ],
+  "events": [
+    {
+      "category": "SESSION",
+      "data": {
+        "session_id": "27e4ddc2-f1a5-432e-af95-ef0c265d473e"
+      },
+      "explanation": "A fresh local demonstration session is ready.",
+      "step": "01",
+      "timestamp": "2026-10-13T05:04:08.594+00:00",
+      "title": "SESSION CREATED"
+    },
+    {
+      "category": "KEY_EXCHANGE",
+      "data": {
+        "alice_public_key": "75be1aaface78077eea923dc1401661f0b61722d0ae9a1b2ce1ced9b654a3962",
+        "alice_signing_public_key": "b64c333506882bacb45cc25f832fc4604cba1707ae41bcdf9fdc0ec23c4af17b",
+        "bob_public_key": "a512322c111dc561f890b659c035489ff4255cd940716aa38850bfce344c2e10",
+        "bob_signing_public_key": "137a23a2508080e3e25178d30b820a02c9a3e6f3a0267e6a5b83e3ba6647e3a6",
+        "private_keys": "NOT DISPLAYED"
+      },
+      "explanation": "Pinned X25519 and Ed25519 public keys are exchanged; private identity keys remain hidden.",
+      "step": "02",
+      "timestamp": "2026-10-13T05:04:08.595+00:00",
+      "title": "X25519 COMPLETE"
+    },
+    {
+      "category": "KDF",
+      "data": {
+        "algorithm": "HKDF-SHA-256",
+        "domain": "cipherchat-v1",
+        "label": "LOCAL DEMONSTRATION VALUE",
+        "session_key": "c258989666666c73cd8ead1bdb42c6d422bf4f8cddf85a609c3258bafdab1fa0"
+      },
+      "explanation": "The ECDH output is processed by HKDF before use as an AES key.",
+      "step": "03",
+      "timestamp": "2026-10-13T05:04:08.595+00:00",
+      "title": "HKDF SESSION KEY DERIVED"
+    },
+    {
+      "category": "MESSAGE",
+      "data": {
+        "message_id": "321d041e-c592-432d-abb0-a5486ab7f746",
+        "plaintext": "hi",
+        "recipient": "Bob",
+        "sender": "Alice",
+        "sequence_number": 1
+      },
+      "explanation": "A random UUID and monotonically increasing sequence identify this message.",
+      "step": "04",
+      "timestamp": "2026-10-13T05:04:17.041+00:00",
+      "title": "MESSAGE CREATED"
+    },
+    {
+      "category": "AAD",
+      "data": {
+        "aad_json": {
+          "message_id": "321d041e-c592-432d-abb0-a5486ab7f746",
+          "protocol_version": 2,
+          "sender_id": "alice",
+          "sequence_number": 1,
+          "session_id": "27e4ddc2-f1a5-432e-af95-ef0c265d473e"
+        },
+        "aad_utf8": "{\"message_id\":\"321d041e-c592-432d-abb0-a5486ab7f746\",\"protocol_version\":2,\"sender_id\":\"alice\",\"sequence_number\":1,\"session_id\":\"27e4ddc2-f1a5-432e-af95-ef0c265d473e\"}"
+      },
+      "explanation": "AAD authenticates routing and replay metadata without encrypting it.",
+      "step": "05",
+      "timestamp": "2026-10-13T05:04:17.041+00:00",
+      "title": "CANONICAL AAD CONSTRUCTED"
+    },
+    {
+      "category": "ENCRYPTION",
+      "data": {
+        "algorithm": "AES-256-GCM",
+        "authentication_tag": "9627c72834a9ea9657492404ef97759f",
+        "ciphertext": "2da5",
+        "ciphertext_and_tag": "2da59627c72834a9ea9657492404ef97759f",
+        "label": "LOCAL DEMONSTRATION VALUES",
+        "nonce": "1d9211cd0d45fb094d9bd66a",
+        "session_key": "c258989666666c73cd8ead1bdb42c6d422bf4f8cddf85a609c3258bafdab1fa0"
+      },
+      "explanation": "A fresh nonce and the session key protect the plaintext and authenticate the AAD.",
+      "step": "06",
+      "timestamp": "2026-10-13T05:04:17.041+00:00",
+      "title": "AES-256-GCM ENCRYPTION"
+    },
+    {
+      "category": "SIGNATURE",
+      "data": {
+        "algorithm": "Ed25519",
+        "signature": "8b6c90d74f1843f371616b6824606d5754602ca852f3325b13a2acac78397bacd141f5e7bea804a3226f7a54084858e6c62ac3730a1c8fb329f5570936cdd30f",
+        "signed_bytes_sha256": "69121edb1b6e45888522f10196b9a4199e0c28e57d12024aefaaf0cd6d00c260"
+      },
+      "explanation": "The sender signs the complete canonical encrypted envelope with its private identity key.",
+      "step": "07",
+      "timestamp": "2026-10-13T05:04:17.041+00:00",
+      "title": "ED25519 SIGNATURE CREATED"
+    },
+    {
+      "category": "TRANSMISSION",
+      "data": {
+        "raw_json": "{\"ciphertext\":\"LaWWJ8coNKnqlldJJATvl3Wf\",\"message_id\":\"321d041e-c592-432d-abb0-a5486ab7f746\",\"nonce\":\"HZIRzQ1F+wlNm9Zq\",\"protocol_version\":2,\"sender_id\":\"alice\",\"sequence_number\":1,\"session_id\":\"27e4ddc2-f1a5-432e-af95-ef0c265d473e\",\"signature\":\"i2yQ108YQ/NxYWtoJGBtV1RgLKhS8zJbE6KsrHg5e6zRQfXnvqgEoyJvelQISFjmxirDcwocj7Mp9VcJNs3TDw==\"}",
+        "raw_protocol_message": {
+          "ciphertext": "LaWWJ8coNKnqlldJJATvl3Wf",
+          "message_id": "321d041e-c592-432d-abb0-a5486ab7f746",
+          "nonce": "HZIRzQ1F+wlNm9Zq",
+          "protocol_version": 2,
+          "sender_id": "alice",
+          "sequence_number": 1,
+          "session_id": "27e4ddc2-f1a5-432e-af95-ef0c265d473e",
+          "signature": "i2yQ108YQ/NxYWtoJGBtV1RgLKhS8zJbE6KsrHg5e6zRQfXnvqgEoyJvelQISFjmxirDcwocj7Mp9VcJNs3TDw=="
+        }
+      },
+      "explanation": "The serialized protocol message carries metadata, nonce, ciphertext, and signature.",
+      "step": "08",
+      "timestamp": "2026-10-13T05:04:17.041+00:00",
+      "title": "MESSAGE TRANSMITTED"
+    },
+    {
+      "category": "RECEPTION",
+      "data": {
+        "sender_id": "alice",
+        "session_id": "27e4ddc2-f1a5-432e-af95-ef0c265d473e"
+      },
+      "explanation": "Bob passed the received object to the real protocol receiver.",
+      "step": "09",
+      "timestamp": "2026-10-13T05:04:17.041+00:00",
+      "title": "BOB RECEIVED MESSAGE"
+    },
+    {
+      "category": "SIGNATURE",
+      "data": {
+        "expected_sender": "alice",
+        "signature_valid": true
+      },
+      "explanation": "The receiver verified authorship against the sender's pinned Ed25519 public key before decryption.",
+      "step": "10",
+      "timestamp": "2026-10-13T05:04:17.041+00:00",
+      "title": "ED25519 SIGNATURE VERIFIED"
+    },
+    {
+      "category": "VALIDATION",
+      "data": {
+        "message_id": "321d041e-c592-432d-abb0-a5486ab7f746",
+        "replay_result": "NOT PREVIOUSLY ACCEPTED",
+        "sender_valid": true,
+        "sequence_number": 1,
+        "session_valid": true
+      },
+      "explanation": "The receiver checks its session binding and replay caches before accepting the message.",
+      "step": "11",
+      "timestamp": "2026-10-13T05:04:17.041+00:00",
+      "title": "REPLAY AND SESSION VALIDATION"
+    },
+    {
+      "category": "DECRYPTION",
+      "data": {
+        "authentication": "VALID",
+        "plaintext_recovered": "hi"
+      },
+      "explanation": "The GCM tag authenticated the ciphertext and AAD before plaintext was returned.",
+      "step": "12",
+      "timestamp": "2026-10-13T05:04:17.041+00:00",
+      "title": "AES-GCM AUTHENTICATION AND DECRYPTION"
+    },
+    {
+      "category": "MESSAGE",
+      "data": {
+        "message_id": "321d041e-c592-432d-abb0-a5486ab7f746",
+        "sequence_number": 1
+      },
+      "explanation": "Bob accepted the signed, authenticated, non-replayed message.",
+      "step": "13",
+      "timestamp": "2026-10-13T05:04:17.041+00:00",
+      "title": "MESSAGE ACCEPTED"
+    },
+    {
+      "category": "MESSAGE",
+      "data": {
+        "message_id": "52f26e0a-d377-4f0e-a15b-44ffcd4e96c1",
+        "plaintext": "hi",
+        "recipient": "Alice",
+        "sender": "Bob",
+        "sequence_number": 1
+      },
+      "explanation": "A random UUID and monotonically increasing sequence identify this message.",
+      "step": "04",
+      "timestamp": "2026-10-13T05:04:19.770+00:00",
+      "title": "MESSAGE CREATED"
+    },
+    {
+      "category": "AAD",
+      "data": {
+        "aad_json": {
+          "message_id": "52f26e0a-d377-4f0e-a15b-44ffcd4e96c1",
+          "protocol_version": 2,
+          "sender_id": "bob",
+          "sequence_number": 1,
+          "session_id": "27e4ddc2-f1a5-432e-af95-ef0c265d473e"
+        },
+        "aad_utf8": "{\"message_id\":\"52f26e0a-d377-4f0e-a15b-44ffcd4e96c1\",\"protocol_version\":2,\"sender_id\":\"bob\",\"sequence_number\":1,\"session_id\":\"27e4ddc2-f1a5-432e-af95-ef0c265d473e\"}"
+      },
+      "explanation": "AAD authenticates routing and replay metadata without encrypting it.",
+      "step": "05",
+      "timestamp": "2026-10-13T05:04:19.770+00:00",
+      "title": "CANONICAL AAD CONSTRUCTED"
+    },
+    {
+      "category": "ENCRYPTION",
+      "data": {
+        "algorithm": "AES-256-GCM",
+        "authentication_tag": "ef9f0d76d62354f9aa2959cc29896822",
+        "ciphertext": "94b5",
+        "ciphertext_and_tag": "94b5ef9f0d76d62354f9aa2959cc29896822",
+        "label": "LOCAL DEMONSTRATION VALUES",
+        "nonce": "0ee0e08890e3d3fab7d146ad",
+        "session_key": "c258989666666c73cd8ead1bdb42c6d422bf4f8cddf85a609c3258bafdab1fa0"
+      },
+      "explanation": "A fresh nonce and the session key protect the plaintext and authenticate the AAD.",
+      "step": "06",
+      "timestamp": "2026-10-13T05:04:19.770+00:00",
+      "title": "AES-256-GCM ENCRYPTION"
+    },
+    {
+      "category": "SIGNATURE",
+      "data": {
+        "algorithm": "Ed25519",
+        "signature": "61280a58bedd37b91484849b4826b561a0d9730147f0bc398e0c727806a153e2a3bf7840f9b91cc61b9c47469c605a6de3eb55b00e467ec3189806e2a20b830a",
+        "signed_bytes_sha256": "eb75f594a433c115ff85145ad0c1a79eb47b9a63336f540eff97567a028443fe"
+      },
+      "explanation": "The sender signs the complete canonical encrypted envelope with its private identity key.",
+      "step": "07",
+      "timestamp": "2026-10-13T05:04:19.770+00:00",
+      "title": "ED25519 SIGNATURE CREATED"
+    },
+    {
+      "category": "TRANSMISSION",
+      "data": {
+        "raw_json": "{\"ciphertext\":\"lLXvnw121iNU+aopWcwpiWgi\",\"message_id\":\"52f26e0a-d377-4f0e-a15b-44ffcd4e96c1\",\"nonce\":\"DuDgiJDj0/q30Uat\",\"protocol_version\":2,\"sender_id\":\"bob\",\"sequence_number\":1,\"session_id\":\"27e4ddc2-f1a5-432e-af95-ef0c265d473e\",\"signature\":\"YSgKWL7dN7kUhISbSCa1YaDZcwFH8Lw5jgxyeAahU+Kjv3hA+bkcxhucR0acYFpt4+tVsA5GfsMYmAbioguDCg==\"}",
+        "raw_protocol_message": {
+          "ciphertext": "lLXvnw121iNU+aopWcwpiWgi",
+          "message_id": "52f26e0a-d377-4f0e-a15b-44ffcd4e96c1",
+          "nonce": "DuDgiJDj0/q30Uat",
+          "protocol_version": 2,
+          "sender_id": "bob",
+          "sequence_number": 1,
+          "session_id": "27e4ddc2-f1a5-432e-af95-ef0c265d473e",
+          "signature": "YSgKWL7dN7kUhISbSCa1YaDZcwFH8Lw5jgxyeAahU+Kjv3hA+bkcxhucR0acYFpt4+tVsA5GfsMYmAbioguDCg=="
+        }
+      },
+      "explanation": "The serialized protocol message carries metadata, nonce, ciphertext, and signature.",
+      "step": "08",
+      "timestamp": "2026-10-13T05:04:19.770+00:00",
+      "title": "MESSAGE TRANSMITTED"
+    },
+    {
+      "category": "RECEPTION",
+      "data": {
+        "sender_id": "bob",
+        "session_id": "27e4ddc2-f1a5-432e-af95-ef0c265d473e"
+      },
+      "explanation": "Alice passed the received object to the real protocol receiver.",
+      "step": "09",
+      "timestamp": "2026-10-13T05:04:19.770+00:00",
+      "title": "ALICE RECEIVED MESSAGE"
+    },
+    {
+      "category": "SIGNATURE",
+      "data": {
+        "expected_sender": "bob",
+        "signature_valid": true
+      },
+      "explanation": "The receiver verified authorship against the sender's pinned Ed25519 public key before decryption.",
+      "step": "10",
+      "timestamp": "2026-10-13T05:04:19.770+00:00",
+      "title": "ED25519 SIGNATURE VERIFIED"
+    },
+    {
+      "category": "VALIDATION",
+      "data": {
+        "message_id": "52f26e0a-d377-4f0e-a15b-44ffcd4e96c1",
+        "replay_result": "NOT PREVIOUSLY ACCEPTED",
+        "sender_valid": true,
+        "sequence_number": 1,
+        "session_valid": true
+      },
+      "explanation": "The receiver checks its session binding and replay caches before accepting the message.",
+      "step": "11",
+      "timestamp": "2026-10-13T05:04:19.770+00:00",
+      "title": "REPLAY AND SESSION VALIDATION"
+    },
+    {
+      "category": "DECRYPTION",
+      "data": {
+        "authentication": "VALID",
+        "plaintext_recovered": "hi"
+      },
+      "explanation": "The GCM tag authenticated the ciphertext and AAD before plaintext was returned.",
+      "step": "12",
+      "timestamp": "2026-10-13T05:04:19.771+00:00",
+      "title": "AES-GCM AUTHENTICATION AND DECRYPTION"
+    },
+    {
+      "category": "MESSAGE",
+      "data": {
+        "message_id": "52f26e0a-d377-4f0e-a15b-44ffcd4e96c1",
+        "sequence_number": 1
+      },
+      "explanation": "Alice accepted the signed, authenticated, non-replayed message.",
+      "step": "13",
+      "timestamp": "2026-10-13T05:04:19.771+00:00",
+      "title": "MESSAGE ACCEPTED"
+    },
+    {
+      "category": "ATTACK",
+      "data": {
+        "attack": "REPLAY",
+        "detail": "ReplayError",
+        "message_id": "6fdb705c-f4dd-46f7-9476-91ff5e11e907",
+        "sequence_number": 1
+      },
+      "explanation": "A controlled local attack scenario ran through the existing backend simulator.",
+      "step": "12",
+      "timestamp": "2026-10-13T05:04:21.490+00:00",
+      "title": "ATTACKER INTERCEPTED"
+    },
+    {
+      "category": "VALIDATION",
+      "data": {
+        "classification": "REPLAY",
+        "detected": true
+      },
+      "explanation": "The displayed classification is produced by the protocol's actual failure path.",
+      "step": "13",
+      "timestamp": "2026-10-13T05:04:21.490+00:00",
+      "title": "SECURITY VIOLATION DETECTED"
+    },
+    {
+      "category": "EVIDENCE",
+      "data": {
+        "checkpoint_valid": true,
+        "evidence_hash": "03b241cf1873e47e299a3ff87b489db2e3dcaaabce6e956eaaf6ada5dfa7520e",
+        "incident_id": "d346167b-fb0e-4fd1-8487-cc5765a08b58",
+        "message_id": "6fdb705c-f4dd-46f7-9476-91ff5e11e907",
+        "previous_evidence_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "sequence_number": 1,
+        "session_id": "simulation-replay"
+      },
+      "explanation": "The controller appended a real hash-chained incident record and verified the complete chain against its checkpoint.",
+      "step": "14",
+      "timestamp": "2026-10-13T05:04:21.490+00:00",
+      "title": "INCIDENT EVIDENCE GENERATED"
+    },
+    {
+      "category": "RECOVERY",
+      "data": {
+        "current_state": "SECURE",
+        "history": [
+          "SECURE",
+          "SUSPECTED_ATTACK",
+          "QUARANTINED",
+          "VERIFYING",
+          "REKEYING",
+          "SECURE"
+        ]
+      },
+      "explanation": "The existing bounded recovery state machine determined the next state.",
+      "step": "15",
+      "timestamp": "2026-10-13T05:04:21.490+00:00",
+      "title": "RECOVERY STATE TRANSITIONS"
+    },
+    {
+      "category": "REKEY",
+      "data": {
+        "new_session_active": true,
+        "old_session_invalidated": true,
+        "rekeyed": true,
+        "state": "SECURE"
+      },
+      "explanation": "Recoverable scenarios install a new session; key substitution remains blocked.",
+      "step": "16",
+      "timestamp": "2026-10-13T05:04:21.490+00:00",
+      "title": "REKEY OR BLOCK RESULT"
+    },
+    {
+      "category": "ATTACK",
+      "data": {
+        "attack": "TAMPERING",
+        "detail": "DigitalSignatureError",
+        "message_id": "e0cfdace-4170-465d-9a7d-4da2c881096e",
+        "sequence_number": 1
+      },
+      "explanation": "A controlled local attack scenario ran through the existing backend simulator.",
+      "step": "12",
+      "timestamp": "2026-10-13T05:04:45.407+00:00",
+      "title": "ATTACKER INTERCEPTED"
+    },
+    {
+      "category": "VALIDATION",
+      "data": {
+        "classification": "TAMPERING",
+        "detected": true
+      },
+      "explanation": "The displayed classification is produced by the protocol's actual failure path.",
+      "step": "13",
+      "timestamp": "2026-10-13T05:04:45.407+00:00",
+      "title": "SECURITY VIOLATION DETECTED"
+    },
+    {
+      "category": "EVIDENCE",
+      "data": {
+        "checkpoint_valid": true,
+        "evidence_hash": "78bf08fe76130fa878271a64c6954b23e36e402584b35e816dd13b6c37a0e6cc",
+        "incident_id": "bcdbf4b8-7fad-44ab-bcd6-f07d39744bd2",
+        "message_id": "e0cfdace-4170-465d-9a7d-4da2c881096e",
+        "previous_evidence_hash": "03b241cf1873e47e299a3ff87b489db2e3dcaaabce6e956eaaf6ada5dfa7520e",
+        "sequence_number": 1,
+        "session_id": "simulation-tampering-ciphertext"
+      },
+      "explanation": "The controller appended a real hash-chained incident record and verified the complete chain against its checkpoint.",
+      "step": "14",
+      "timestamp": "2026-10-13T05:04:45.407+00:00",
+      "title": "INCIDENT EVIDENCE GENERATED"
+    },
+    {
+      "category": "RECOVERY",
+      "data": {
+        "current_state": "SECURE",
+        "history": [
+          "SECURE",
+          "SUSPECTED_ATTACK",
+          "QUARANTINED",
+          "VERIFYING",
+          "REKEYING",
+          "SECURE"
+        ]
+      },
+      "explanation": "The existing bounded recovery state machine determined the next state.",
+      "step": "15",
+      "timestamp": "2026-10-13T05:04:45.407+00:00",
+      "title": "RECOVERY STATE TRANSITIONS"
+    },
+    {
+      "category": "REKEY",
+      "data": {
+        "new_session_active": true,
+        "old_session_invalidated": true,
+        "rekeyed": true,
+        "state": "SECURE"
+      },
+      "explanation": "Recoverable scenarios install a new session; key substitution remains blocked.",
+      "step": "16",
+      "timestamp": "2026-10-13T05:04:45.408+00:00",
+      "title": "REKEY OR BLOCK RESULT"
+    }
+  ],
+  "evidence": {
+    "chain_valid": true,
+    "checkpoint": {
+      "evidence_hash": "78bf08fe76130fa878271a64c6954b23e36e402584b35e816dd13b6c37a0e6cc",
+      "record_count": 2
+    },
+    "exported_at": "2026-10-13T05:04:45.409014+00:00",
+    "format": "cipherchat-evidence-log-v1",
+    "record_count": 2,
+    "records": [
+      {
+        "attack_type": "REPLAY",
+        "description": "Controlled UI test rejected REPLAY: ReplayError",
+        "evidence_hash": "03b241cf1873e47e299a3ff87b489db2e3dcaaabce6e956eaaf6ada5dfa7520e",
+        "incident_id": "d346167b-fb0e-4fd1-8487-cc5765a08b58",
+        "message_id": "6fdb705c-f4dd-46f7-9476-91ff5e11e907",
+        "previous_evidence_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "sequence_number": 1,
+        "session_id": "simulation-replay",
+        "timestamp": "2026-10-13T05:04:21.490553+00:00"
+      },
+      {
+        "attack_type": "TAMPERING",
+        "description": "Controlled UI test rejected TAMPERING: DigitalSignatureError",
+        "evidence_hash": "78bf08fe76130fa878271a64c6954b23e36e402584b35e816dd13b6c37a0e6cc",
+        "incident_id": "bcdbf4b8-7fad-44ab-bcd6-f07d39744bd2",
+        "message_id": "e0cfdace-4170-465d-9a7d-4da2c881096e",
+        "previous_evidence_hash": "03b241cf1873e47e299a3ff87b489db2e3dcaaabce6e956eaaf6ada5dfa7520e",
+        "sequence_number": 1,
+        "session_id": "simulation-tampering-ciphertext",
+        "timestamp": "2026-10-13T05:04:45.407720+00:00"
+      }
+    ],
+    "tip_evidence_hash": "78bf08fe76130fa878271a64c6954b23e36e402584b35e816dd13b6c37a0e6cc"
+  },
+  "exported_at": "2026-10-13T05:04:45.408+00:00",
+  "format": "cipherchat-demonstration-logs-v1",
+  "http_audit_logs": [
+    {
+      "client_ip": "127.0.0.1",
+      "duration_ms": 1.114,
+      "error": null,
+      "method": "GET",
+      "path": "/api/state",
+      "status_code": 200,
+      "timestamp": "2026-10-13T05:04:13.821+00:00"
+    },
+    {
+      "client_ip": "127.0.0.1",
+      "duration_ms": 4.995,
+      "error": null,
+      "method": "POST",
+      "path": "/api/send",
+      "status_code": 200,
+      "timestamp": "2026-10-13T05:04:17.041+00:00"
+    },
+    {
+      "client_ip": "127.0.0.1",
+      "duration_ms": 2.065,
+      "error": null,
+      "method": "POST",
+      "path": "/api/send",
+      "status_code": 200,
+      "timestamp": "2026-10-13T05:04:19.771+00:00"
+    },
+    {
+      "client_ip": "127.0.0.1",
+      "duration_ms": 4.992,
+      "error": null,
+      "method": "POST",
+      "path": "/api/attack",
+      "status_code": 200,
+      "timestamp": "2026-10-13T05:04:21.491+00:00"
+    },
+    {
+      "client_ip": "127.0.0.1",
+      "duration_ms": 5.447,
+      "error": null,
+      "method": "POST",
+      "path": "/api/attack",
+      "status_code": 200,
+      "timestamp": "2026-10-13T05:04:45.408+00:00"
+    }
+  ],
+  "session": {
+    "alice_public_key": "75be1aaface78077eea923dc1401661f0b61722d0ae9a1b2ce1ced9b654a3962",
+    "alice_signing_public_key": "b64c333506882bacb45cc25f832fc4604cba1707ae41bcdf9fdc0ec23c4af17b",
+    "bob_public_key": "a512322c111dc561f890b659c035489ff4255cd940716aa38850bfce344c2e10",
+    "bob_signing_public_key": "137a23a2508080e3e25178d30b820a02c9a3e6f3a0267e6a5b83e3ba6647e3a6",
+    "encryption": "AES-256-GCM",
+    "kdf": "HKDF-SHA-256",
+    "key_exchange": "X25519",
+    "session_id": "27e4ddc2-f1a5-432e-af95-ef0c265d473e",
+    "session_key": "c258989666666c73cd8ead1bdb42c6d422bf4f8cddf85a609c3258bafdab1fa0"
+  },
+  "session_id": "27e4ddc2-f1a5-432e-af95-ef0c265d473e",
+  "system_limits": {
+    "max_ciphertext_size": 65552,
+    "max_context_length": 1024,
+    "max_id_length": 256,
+    "max_json_message_size": 262144,
+    "max_plaintext_size": 65536,
+    "max_request_body_size": 1048576
+  }
 }

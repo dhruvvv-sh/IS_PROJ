@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Lock
 from time import perf_counter_ns
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -28,6 +29,17 @@ from cipherchat.security.evidence import EvidenceLog, verify_evidence_chain
 from cipherchat.security.simulator import AttackSimulator
 
 STATIC_DIR = Path(__file__).with_name("static")
+LIVE_LOG_PATH = Path(__file__).resolve().parents[2] / "security_test_results" / "attack_simulation.json"
+
+
+def _write_live_logs(controller: "DemonstrationController", audit_logs: list[dict[str, object]], path: Path) -> None:
+    """Atomically persist the current port-8000 demonstration and request history."""
+    payload = controller.export_logs()
+    payload["http_audit_logs"] = list(audit_logs)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_suffix(path.suffix + ".tmp")
+    temporary_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    temporary_path.replace(path)
 
 
 @dataclass(frozen=True)
@@ -54,6 +66,7 @@ class DemonstrationController:
         self.session_id: str | None = None
         self.events: list[ObservationEvent] = []
         self.deliveries: list[dict[str, object]] = []
+        self.attacks: list[dict[str, object]] = []
         self.evidence = EvidenceLog()
         self.establish()
 
@@ -63,6 +76,7 @@ class DemonstrationController:
         self.bob_sessions = SessionManager(self.bob, self.alice.identity_id, public_key_bytes(self.alice.public_key), self.alice.signing_public_key_bytes)
         self.session_id = str(uuid4())
         self.deliveries = []
+        self.attacks = []
         self.evidence = EvidenceLog()
         context = b"cipherchat-ui-demo:" + self.session_id.encode()
         self.alice_sessions.establish(public_key_bytes(self.bob.public_key), self.bob.signing_public_key_bytes, session_id=self.session_id, context=context)
@@ -100,6 +114,7 @@ class DemonstrationController:
                 "private_keys": "NOT DISPLAYED",
             },
             "deliveries": self.deliveries,
+            "attacks": self.attacks,
             "evidence": {
                 "records": [asdict(record) for record in self.evidence.records],
                 "checkpoint": asdict(checkpoint),
@@ -133,6 +148,7 @@ class DemonstrationController:
                 "bob_signing_public_key": self.bob.signing_public_key_bytes.hex() if self.bob else None,
             },
             "deliveries": self.deliveries,
+            "attacks": self.attacks,
             "evidence": self.evidence.to_dict(),
             "events": [asdict(event) for event in self.events],
         }
@@ -204,6 +220,7 @@ class DemonstrationController:
         )
         checkpoint = self.evidence.checkpoint()
         result_data = {
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
             "attack_type": result.attack_type.value, "classification": result.classification.value,
             "detected": result.detected, "session_id": result.session_id, "message_id": result.message_id,
             "sequence_number": result.sequence_number, "evidence_generated": result.evidence_generated,
@@ -214,6 +231,7 @@ class DemonstrationController:
             "rekeyed": result.rekeyed, "old_session_invalidated": result.old_session_invalidated,
             "detail": result.detail,
         }
+        self.attacks.append(result_data)
         self.events.extend([
             _event("ATTACK", "12", "ATTACKER INTERCEPTED", {"attack": result.attack_type.value, "detail": result.detail, "message_id": result.message_id, "sequence_number": result.sequence_number}, "A controlled local attack scenario ran through the existing backend simulator."),
             _event("VALIDATION", "13", "SECURITY VIOLATION DETECTED", {"classification": result.classification.value, "detected": result.detected}, "The displayed classification is produced by the protocol's actual failure path."),
@@ -227,17 +245,21 @@ class DemonstrationController:
 class _Handler(SimpleHTTPRequestHandler):
     controller = DemonstrationController()
     audit_logs: list[dict[str, object]] = []
+    live_log_path = LIVE_LOG_PATH
+    live_log_lock = Lock()
 
     def _log_request_json(self, method: str, path: str, status_code: int, duration_ms: float, client_ip: str, error: str | None = None) -> None:
-        self.audit_logs.append({
-            "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
-            "method": method,
-            "path": path,
-            "status_code": int(status_code),
-            "duration_ms": round(duration_ms, 3),
-            "client_ip": client_ip,
-            "error": error,
-        })
+        with self.live_log_lock:
+            self.audit_logs.append({
+                "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+                "method": method,
+                "path": path,
+                "status_code": int(status_code),
+                "duration_ms": round(duration_ms, 3),
+                "client_ip": client_ip,
+                "error": error,
+            })
+            _write_live_logs(self.controller, self.audit_logs, self.live_log_path)
 
     def do_GET(self) -> None:
         start_time = perf_counter_ns()
@@ -324,7 +346,10 @@ class _Handler(SimpleHTTPRequestHandler):
 
 def main() -> None:
     server = ThreadingHTTPServer(("127.0.0.1", 8000), _Handler)
+    with _Handler.live_log_lock:
+        _write_live_logs(_Handler.controller, _Handler.audit_logs, _Handler.live_log_path)
     print("CipherChat local demonstration UI: http://127.0.0.1:8000")
+    print(f"Live JSON log: {LIVE_LOG_PATH}")
     try: server.serve_forever()
     except KeyboardInterrupt: pass
     finally: server.server_close()

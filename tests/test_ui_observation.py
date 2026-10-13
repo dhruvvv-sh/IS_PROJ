@@ -23,6 +23,8 @@ def test_attack_observations_use_simulator_evidence_and_recovery():
     assert attack["detected"] and attack["classification"] == "REPLAY"
     assert attack["evidence_generated"] and attack["checkpoint_valid"]
     assert attack["rekeyed"] and attack["old_session_invalidated"]
+    assert result["attacks"] == [attack]
+    assert result["attacks"][0]["timestamp"]
     names = [event["title"] for event in result["events"]]
     assert "ATTACKER INTERCEPTED" in names
     assert "INCIDENT EVIDENCE GENERATED" in names
@@ -34,6 +36,20 @@ def test_key_substitution_observation_shows_blocked_session():
     assert result["attack"]["classification"] == "KEY_SUBSTITUTION"
     assert result["attack"]["recovery_state"] == "BLOCKED"
     assert not result["attack"]["rekeyed"]
+
+
+def test_attack_history_is_exported_and_reset_with_the_session():
+    controller = DemonstrationController()
+    first = controller.attack("replay")["attack"]
+    second = controller.attack("tamper_nonce")["attack"]
+
+    exported = controller.export_logs()
+    assert exported["attacks"] == [first, second]
+    assert [item["attack_type"] for item in exported["attacks"]] == ["REPLAY", "TAMPERING"]
+
+    reset = controller.establish()
+    assert reset["attacks"] == []
+    assert controller.export_logs()["attacks"] == []
 
 
 def test_ui_snapshot_exposes_delivery_hashes_and_verified_evidence_chain():

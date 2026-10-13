@@ -286,12 +286,5 @@ def main() -> None:
     print("\n" + "=" * 50 + "\nSimulation Complete")
     print(f"Attacks: {metrics.total_attacks}; detected: {metrics.attacks_detected}; missed: {metrics.attacks_missed}")
     print(f"Detection rate: {metrics.detection_rate:.0%}; recovery success rate: {metrics.recovery_success_rate:.0%}")
-    out_dir = Path("security_test_results")
-    if out_dir.exists():
-        json_path = out_dir / "attack_simulation.json"
-        report.export_json(json_path)
-        print(f"JSON LOG:       {json_path}")
-
-
 if __name__ == "__main__":
     main()

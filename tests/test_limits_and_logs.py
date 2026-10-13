@@ -259,15 +259,18 @@ def test_ui_controller_export_logs_contains_all_relevant_info():
     assert logs["system_limits"]["max_context_length"] == MAX_CONTEXT_LENGTH
 
     assert len(logs["deliveries"]) >= 1
+    assert len(logs["attacks"]) == 1
+    assert logs["attacks"][0]["attack_type"] == "REPLAY"
     assert len(logs["evidence"]["records"]) >= 1
     assert logs["evidence"]["chain_valid"] is True
     assert len(logs["events"]) > 0
 
 
-def test_ui_server_audit_logging():
+def test_ui_server_audit_logging(tmp_path: Path):
     handler = _Handler.__new__(_Handler)
     handler.controller = DemonstrationController()
     handler.audit_logs = []
+    handler.live_log_path = tmp_path / "attack_simulation.json"
     handler.client_address = ("127.0.0.1", 54321)
     sent = []
     handler._json = lambda p, status=HTTPStatus.OK: sent.append((p, status))
@@ -280,6 +283,9 @@ def test_ui_server_audit_logging():
     assert handler.audit_logs[0]["status_code"] == 200
     assert "duration_ms" in handler.audit_logs[0]
     assert handler.audit_logs[0]["client_ip"] == "127.0.0.1"
+    persisted = json.loads(handler.live_log_path.read_text(encoding="utf-8"))
+    assert persisted["format"] == "cipherchat-demonstration-logs-v1"
+    assert persisted["http_audit_logs"] == handler.audit_logs
 
     handler.path = "/api/audit-logs"
     handler.do_GET()

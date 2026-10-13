@@ -9,6 +9,12 @@ python -m cipherchat.ui.server
 Open `http://127.0.0.1:8000`. This is a local-only **DEMONSTRATION MODE** for
 teaching, not a production chat service.
 
+The server atomically refreshes `security_test_results/attack_simulation.json`
+after each API request. The file contains the current session, delivered
+messages, a dedicated history of complete attack results, attack evidence,
+observation events, and HTTP audit entries. Starting the server creates a fresh
+log, while the Reset action clears the session data and persists the new state.
+
 ## Architecture
 
 ```text
@@ -71,7 +77,8 @@ not claim complete MITM prevention or safe first-contact key provisioning.
 
 ## Limitations
 
-- Local single-process demonstration; no network transport or persistence.
+- Local single-process demonstration; JSON persistence is a local audit snapshot,
+  not a database or network transport.
 - Session-key visibility is only permitted in explicit demonstration mode.
 - Attack simulations are controlled local scenarios, not penetration tests.
 - Evidence checkpoints must be retained independently to resist log rewriting.
