@@ -1,0 +1,184 @@
+{
+  "comparability": "AES-GCM is encryption only; Fernet is symmetric authenticated encryption; CipherChat adds X25519-derived key setup, Ed25519 signatures, IDs, and replay metadata. Setup is excluded from per-message timing. These are library baselines, not Signal/WhatsApp end-to-end benchmarks.",
+  "environment": {
+    "cryptography": "50.0.2",
+    "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
+    "python": "3.14.6"
+  },
+  "format": "cipherchat-performance-benchmark-v1",
+  "generated_at": "2026-10-31T05:18:41.020408+00:00",
+  "method": "Single-process local timing with perf_counter_ns; 20 warmup runs per scheme/size; sequential operations; no network or disk I/O.",
+  "results": [
+    {
+      "decrypt": {
+        "mean_ms": 0.000374,
+        "median_ms": 0.000375,
+        "median_wire_bytes": 92,
+        "p95_ms": 0.000417,
+        "throughput_mib_s": 163.194
+      },
+      "encrypt": {
+        "mean_ms": 0.001164,
+        "median_ms": 0.001167,
+        "median_wire_bytes": 92,
+        "p95_ms": 0.00125,
+        "throughput_mib_s": 52.45
+      },
+      "iterations": 300,
+      "payload_bytes": 64,
+      "scheme": "AES-256-GCM"
+    },
+    {
+      "decrypt": {
+        "mean_ms": 0.004568,
+        "median_ms": 0.004583,
+        "median_wire_bytes": 184,
+        "p95_ms": 0.00475,
+        "throughput_mib_s": 13.361
+      },
+      "encrypt": {
+        "mean_ms": 0.004894,
+        "median_ms": 0.004958,
+        "median_wire_bytes": 184,
+        "p95_ms": 0.005125,
+        "throughput_mib_s": 12.472
+      },
+      "iterations": 300,
+      "payload_bytes": 64,
+      "scheme": "Fernet"
+    },
+    {
+      "decrypt": {
+        "mean_ms": 0.116949,
+        "median_ms": 0.080125,
+        "median_wire_bytes": 395,
+        "p95_ms": 0.111,
+        "throughput_mib_s": 0.522
+      },
+      "encrypt": {
+        "mean_ms": 0.081764,
+        "median_ms": 0.036208,
+        "median_wire_bytes": 395,
+        "p95_ms": 0.052125,
+        "throughput_mib_s": 0.746
+      },
+      "iterations": 300,
+      "payload_bytes": 64,
+      "scheme": "CipherChat"
+    },
+    {
+      "decrypt": {
+        "mean_ms": 0.000523,
+        "median_ms": 0.0005,
+        "median_wire_bytes": 1052,
+        "p95_ms": 0.000584,
+        "throughput_mib_s": 1866.269
+      },
+      "encrypt": {
+        "mean_ms": 0.001307,
+        "median_ms": 0.001292,
+        "median_wire_bytes": 1052,
+        "p95_ms": 0.001541,
+        "throughput_mib_s": 746.963
+      },
+      "iterations": 300,
+      "payload_bytes": 1024,
+      "scheme": "AES-256-GCM"
+    },
+    {
+      "decrypt": {
+        "mean_ms": 0.015112,
+        "median_ms": 0.016041,
+        "median_wire_bytes": 1464,
+        "p95_ms": 0.017083,
+        "throughput_mib_s": 64.621
+      },
+      "encrypt": {
+        "mean_ms": 0.013522,
+        "median_ms": 0.015958,
+        "median_wire_bytes": 1464,
+        "p95_ms": 0.017584,
+        "throughput_mib_s": 72.222
+      },
+      "iterations": 300,
+      "payload_bytes": 1024,
+      "scheme": "Fernet"
+    },
+    {
+      "decrypt": {
+        "mean_ms": 0.081786,
+        "median_ms": 0.083416,
+        "median_wire_bytes": 1675,
+        "p95_ms": 0.086833,
+        "throughput_mib_s": 11.941
+      },
+      "encrypt": {
+        "mean_ms": 0.039587,
+        "median_ms": 0.040292,
+        "median_wire_bytes": 1675,
+        "p95_ms": 0.042542,
+        "throughput_mib_s": 24.669
+      },
+      "iterations": 300,
+      "payload_bytes": 1024,
+      "scheme": "CipherChat"
+    },
+    {
+      "decrypt": {
+        "mean_ms": 0.001332,
+        "median_ms": 0.001333,
+        "median_wire_bytes": 8220,
+        "p95_ms": 0.001375,
+        "throughput_mib_s": 5863.788
+      },
+      "encrypt": {
+        "mean_ms": 0.002045,
+        "median_ms": 0.002042,
+        "median_wire_bytes": 8220,
+        "p95_ms": 0.002084,
+        "throughput_mib_s": 3820.393
+      },
+      "iterations": 300,
+      "payload_bytes": 8192,
+      "scheme": "AES-256-GCM"
+    },
+    {
+      "decrypt": {
+        "mean_ms": 0.032922,
+        "median_ms": 0.033291,
+        "median_wire_bytes": 11020,
+        "p95_ms": 0.036083,
+        "throughput_mib_s": 237.306
+      },
+      "encrypt": {
+        "mean_ms": 0.024635,
+        "median_ms": 0.024542,
+        "median_wire_bytes": 11020,
+        "p95_ms": 0.027084,
+        "throughput_mib_s": 317.13
+      },
+      "iterations": 300,
+      "payload_bytes": 8192,
+      "scheme": "Fernet"
+    },
+    {
+      "decrypt": {
+        "mean_ms": 0.138622,
+        "median_ms": 0.113334,
+        "median_wire_bytes": 11231,
+        "p95_ms": 0.134125,
+        "throughput_mib_s": 56.358
+      },
+      "encrypt": {
+        "mean_ms": 0.078473,
+        "median_ms": 0.075833,
+        "median_wire_bytes": 11231,
+        "p95_ms": 0.104167,
+        "throughput_mib_s": 99.556
+      },
+      "iterations": 300,
+      "payload_bytes": 8192,
+      "scheme": "CipherChat"
+    }
+  ]
+}
