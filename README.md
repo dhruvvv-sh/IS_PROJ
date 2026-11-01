@@ -25,6 +25,11 @@ material is included in that log.
 
 See [UI_OBSERVATION_GUIDE.md](UI_OBSERVATION_GUIDE.md) for the local
 cryptographic observation interface and its demonstration-mode boundaries.
+See [ALGORITHMS_AND_DATA_FLOW.md](ALGORITHMS_AND_DATA_FLOW.md) for the
+implemented algorithms, process order, and input/output byte sizes.
+See [VIVA_QUESTIONS_AND_ANSWERS.md](VIVA_QUESTIONS_AND_ANSWERS.md) for concise
+answers to likely questions about the key exchange, KDF, messages, attacks,
+evidence, and current implementation limits.
 
 ## Design
 
@@ -53,5 +58,7 @@ Recovery only permits:
 
 `SECURE → SUSPECTED_ATTACK → QUARANTINED → VERIFYING → REKEYING → SECURE`
 
-Verification can instead lead to `BLOCKED`. There is no automatic retry loop;
-fresh ECDH material is required before resuming after rekeying.
+Verification can instead lead to `BLOCKED`. There is no automatic retry loop.
+The current `rekey()` can derive a new session key when given a changed context,
+but it reuses the identity X25519 key pair; it does not provide a fresh ephemeral
+exchange or enforce context uniqueness.
