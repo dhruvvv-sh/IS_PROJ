@@ -131,7 +131,7 @@ def _authenticity() -> CaseResult:
     probes = (
         replace(message, sender_id="mallory"),
         replace(message, message_id="forged-message-id"),
-        replace(message, ciphertext=b"x" + message.ciphertext[1:]),
+        replace(message, ciphertext=bytes([message.ciphertext[0] ^ 1]) + message.ciphertext[1:]),
     )
     rejected = 0
     for probe in probes:
@@ -167,8 +167,8 @@ def _integrity() -> CaseResult:
     assert alice.sender is not None and bob.receiver is not None
     message = alice.sender.encrypt("integrity probe")
     variants = {
-        "ciphertext": replace(message, ciphertext=b"x" + message.ciphertext[1:]),
-        "nonce": replace(message, nonce=b"x" + message.nonce[1:]),
+        "ciphertext": replace(message, ciphertext=bytes([message.ciphertext[0] ^ 1]) + message.ciphertext[1:]),
+        "nonce": replace(message, nonce=bytes([message.nonce[0] ^ 1]) + message.nonce[1:]),
         "sequence_number": replace(message, sequence_number=message.sequence_number + 1),
         "message_id": replace(message, message_id="altered-message-id"),
         "session_id": replace(message, session_id="altered-session"),

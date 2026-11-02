@@ -207,7 +207,8 @@ class AttackSimulator:
         assert sender is not None and receiver is not None
         message = sender.encrypt("tampering scenario")
         changes: dict[TamperField, object] = {
-            "ciphertext": b"x" + message.ciphertext[1:], "nonce": b"x" + message.nonce[1:],
+            "ciphertext": bytes([message.ciphertext[0] ^ 1]) + message.ciphertext[1:],
+            "nonce": bytes([message.nonce[0] ^ 1]) + message.nonce[1:],
             "sequence_number": message.sequence_number + 1, "message_id": "tampered-message-id",
             "session_id": "tampered-session-id", "sender_id": "mallory",
         }

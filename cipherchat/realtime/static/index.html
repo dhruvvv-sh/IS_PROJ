@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CipherChat attack laboratory</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header><div><span class="eyebrow">CIPHERCHAT / HTTP LAB</span><h1>Encrypted messaging and attack laboratory</h1></div><div id="session-label">Disconnected</div></header>
+  <main>
+    <section id="login-panel" class="card">
+      <h2>Log in</h2><p>Open Alice, Bob, and Mallory in separate browser profiles or devices. Messages refresh every three seconds.</p>
+      <form id="login-form"><label>Identity<select id="username"><option>alice</option><option>bob</option><option>mallory</option></select></label>
+        <label>Password<input id="password" type="password" required autocomplete="current-password"></label><button>Connect</button></form>
+      <p id="login-error" class="error"></p>
+    </section>
+    <section id="workspace" hidden>
+      <div class="toolbar"><div id="connection-status" class="pill">Loading</div><div id="peer-status" class="pill">Peer key unchecked</div><div id="audit-status" class="pill">Audit unchecked</div><button id="rekey" class="secondary" hidden>Start new chat / rekey</button><button id="logout" class="secondary">Log out</button></div>
+      <section id="chat-panel" class="grid" hidden>
+        <article class="card"><h2 id="chat-title">Chat</h2><p class="muted">Only signed encrypted envelopes travel through the HTTP relay. Your private keys stay in this browser profile.</p>
+          <div id="messages" class="messages"></div><form id="send-form"><textarea id="message-text" placeholder="Type a message" rows="3" required></textarea><button>Encrypt, sign and send</button></form></article>
+        <article class="card"><h2>Cryptographic evidence</h2><p class="muted">Inspect the full signed envelope, including the nonce, ciphertext, signature, session, and sequence.</p><p id="fingerprints" class="small"></p><select id="evidence-list" aria-label="Select message evidence"><option value="">No message selected</option></select><pre id="envelope-view">No envelope yet.</pre><h3>Delivery status</h3><div id="delivery-list"></div></article>
+      </section>
+      <section id="mallory-panel" class="grid" hidden>
+        <article class="card"><h2>Mallory's captured traffic</h2><p class="muted">This controlled console sees signed ciphertext. It has neither Alice's nor Bob's private keys or passwords.</p>
+          <button id="refresh-captured" class="secondary">Refresh captured messages</button><select id="captured-list" size="8"></select><div class="actions">
+            <button data-attack="replay">Replay captured message</button><button data-attack="tamper">Tamper ciphertext</button>
+            <button data-attack="eavesdrop">Eavesdrop</button><button data-attack="impersonate">Impersonate Alice</button>
+            <button data-attack="stale">Resend stale message</button><button data-attack="key_substitution">Substitute public key</button>
+          </div><h3>Audit record deletion</h3><p class="muted">Controlled lab mode only. Deleting a row invalidates the chain and blocks chat.</p>
+          <button id="refresh-audit" class="secondary">Refresh audit records</button><select id="audit-records" size="6"></select>
+          <button id="delete-record">Delete selected record</button></article>
+        <article class="card"><h2>Attack comparison</h2><p id="attack-result" class="result">Select a captured message and run an attack.</p>
+          <h3>Original signed envelope</h3><pre id="original-envelope">—</pre><h3>Submitted envelope</h3><pre id="submitted-envelope">—</pre></article>
+      </section>
+      <section class="card dashboard"><h2>Security dashboard</h2><div id="counters" class="counters"></div><h3>Chronological security events</h3><div id="events" class="events"></div></section>
+    </section>
+  </main>
+  <script src="/static/app.js" type="module"></script>
+</body>
+</html>

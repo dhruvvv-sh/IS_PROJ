@@ -49,8 +49,8 @@ def test_signature_covers_ciphertext_and_all_protocol_metadata():
     sender, receiver = sessions()
     message = sender.encrypt("signed message")
     for tampered in (
-        replace(message, ciphertext=b"x" + message.ciphertext[1:]),
-        replace(message, nonce=b"x" + message.nonce[1:]),
+        replace(message, ciphertext=bytes([message.ciphertext[0] ^ 1]) + message.ciphertext[1:]),
+        replace(message, nonce=bytes([message.nonce[0] ^ 1]) + message.nonce[1:]),
         replace(message, sender_id="mallory"),
         replace(message, session_id="other"),
         replace(message, message_id="other"),

@@ -86,8 +86,8 @@ def handle_attack(label: str, alice_sessions: SessionManager, bob_sessions: Sess
         message = sender.encrypt(plaintext)
         print_encrypted_message("Alice → Bob (encrypted payload)", message)
         changes = {
-            "ciphertext": b"x" + message.ciphertext[1:],
-            "nonce": b"x" + message.nonce[1:],
+            "ciphertext": bytes([message.ciphertext[0] ^ 1]) + message.ciphertext[1:],
+            "nonce": bytes([message.nonce[0] ^ 1]) + message.nonce[1:],
             "sequence_number": message.sequence_number + 1,
             "message_id": "tampered-message-id",
             "session_id": "tampered-session-id",

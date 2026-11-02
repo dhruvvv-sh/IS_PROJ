@@ -309,8 +309,8 @@ class FlowDemonstration:
         assert receiver is not None
         original = self.last_message
         changes: dict[str, object] = {
-            "ciphertext": b"x" + original.ciphertext[1:],
-            "nonce": b"x" + original.nonce[1:],
+            "ciphertext": bytes([original.ciphertext[0] ^ 1]) + original.ciphertext[1:],
+            "nonce": bytes([original.nonce[0] ^ 1]) + original.nonce[1:],
             "sequence_number": original.sequence_number + 100,
             "message_id": f"tampered-{uuid4()}",
             "session_id": "attacker-controlled-session",

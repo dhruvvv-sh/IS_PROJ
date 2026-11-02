@@ -1,0 +1,429 @@
+"""Transactional MySQL persistence and a checkpointable SHA-256 audit chain."""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+
+import mysql.connector
+
+from .protocol import canonical
+
+GENESIS = "0" * 64
+
+
+class AuditFailure(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class Config:
+    host: str
+    port: int
+    database: str
+    user: str
+    password: str
+    checkpoint: Path | None = None
+
+    @classmethod
+    def from_env(cls):
+        return cls(os.getenv("CIPHERCHAT_MYSQL_HOST", "localhost"), int(os.getenv("CIPHERCHAT_MYSQL_PORT", "3306")),
+                   os.getenv("CIPHERCHAT_MYSQL_DATABASE", "cipherchat"), os.getenv("CIPHERCHAT_MYSQL_USER", "cipheruser"),
+                   os.environ["CIPHERCHAT_MYSQL_PASSWORD"],
+                   Path(os.environ["CIPHERCHAT_AUDIT_CHECKPOINT"]) if os.getenv("CIPHERCHAT_AUDIT_CHECKPOINT") else None)
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+
+
+def _digest(number: int, timestamp: str, kind: str, payload: dict, previous: str) -> str:
+    return hashlib.sha256(canonical({"number": number, "timestamp": timestamp, "kind": kind,
+                                     "payload": payload, "previous_hash": previous})).hexdigest()
+
+
+def _payload(value):
+    return json.loads(value) if isinstance(value, (str, bytes)) else value
+
+
+class Database:
+    def __init__(self, config: Config):
+        self.config = config
+
+    def connect(self):
+        conn = mysql.connector.connect(host=self.config.host, port=self.config.port, database=self.config.database,
+                                       user=self.config.user, password=self.config.password, autocommit=False,
+                                       connection_timeout=5)
+        cur = conn.cursor()
+        cur.execute("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED")
+        cur.close()
+        return conn
+
+    def migrate(self):
+        conn = self.connect()
+        try:
+            cur = conn.cursor()
+            for statement in (
+                """CREATE TABLE IF NOT EXISTS cc_audit_records (
+                    number BIGINT UNSIGNED PRIMARY KEY, timestamp VARCHAR(40) NOT NULL, kind VARCHAR(24) NOT NULL,
+                    payload_json JSON NOT NULL, previous_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+                    record_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL) ENGINE=InnoDB""",
+                """CREATE TABLE IF NOT EXISTS cc_audit_head (
+                    singleton TINYINT PRIMARY KEY, record_count BIGINT UNSIGNED NOT NULL,
+                    record_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL) ENGINE=InnoDB""",
+                """CREATE TABLE IF NOT EXISTS cc_users (
+                    username VARCHAR(32) PRIMARY KEY, exchange_public BINARY(32) NOT NULL,
+                    signing_public BINARY(32) NOT NULL, registered_at VARCHAR(40) NOT NULL) ENGINE=InnoDB""",
+                """CREATE TABLE IF NOT EXISTS cc_messages (
+                    message_id CHAR(36) PRIMARY KEY, conversation_id VARCHAR(64) NOT NULL,
+                    sender_id VARCHAR(32) NOT NULL, receiver_id VARCHAR(32) NOT NULL,
+                    sequence_number BIGINT UNSIGNED NOT NULL, signed_timestamp VARCHAR(40) NOT NULL,
+                    received_at VARCHAR(40) NOT NULL, envelope JSON NOT NULL,
+                    delivery_status VARCHAR(16) NOT NULL,
+                    UNIQUE KEY uq_sender_conversation_sequence (sender_id, conversation_id, sequence_number),
+                    KEY ix_receiver_status (receiver_id, delivery_status)) ENGINE=InnoDB""",
+                """CREATE TABLE IF NOT EXISTS cc_message_state (
+                    sender_id VARCHAR(32) NOT NULL, conversation_id VARCHAR(64) NOT NULL,
+                    highest_sequence BIGINT UNSIGNED NOT NULL,
+                    PRIMARY KEY (sender_id, conversation_id)) ENGINE=InnoDB""",
+                """CREATE TABLE IF NOT EXISTS cc_security_events (
+                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, timestamp VARCHAR(40) NOT NULL,
+                    event_type VARCHAR(40) NOT NULL, actor VARCHAR(32) NOT NULL,
+                    message_id VARCHAR(64) NULL, detail_json JSON NOT NULL,
+                    KEY ix_events_time (id)) ENGINE=InnoDB""",
+            ):
+                cur.execute(statement)
+            cur.execute("INSERT IGNORE INTO cc_audit_head VALUES (1, 0, %s)", (GENESIS,))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _anchor(self):
+        if self.config.checkpoint is None:
+            return None
+        return json.loads(self.config.checkpoint.read_text(encoding="utf-8"))
+
+    def _verify(self, cur):
+        cur.execute("SELECT record_count, record_hash FROM cc_audit_head WHERE singleton = 1 FOR UPDATE")
+        head = cur.fetchone()
+        if head is None:
+            raise AuditFailure("audit head missing")
+        cur.execute("SELECT number, timestamp, kind, payload_json, previous_hash, record_hash FROM cc_audit_records ORDER BY number")
+        previous = GENESIS
+        count = 0
+        anchor = self._anchor()
+        anchor_tip = GENESIS if anchor and anchor["record_count"] == 0 else None
+        expected_messages = {}
+        expected_users = {}
+        expected_events = []
+        for number, timestamp, kind, raw, prior, digest in cur.fetchall():
+            count += 1
+            payload = _payload(raw)
+            if number != count or prior != previous or digest != _digest(number, timestamp, kind, payload, prior):
+                raise AuditFailure(f"audit chain invalid at record {count}")
+            previous = digest
+            if anchor and count == anchor["record_count"]:
+                anchor_tip = digest
+            if kind == "ENCRYPTED_MESSAGE" and payload.get("protocol_version") == 3:
+                expected_messages[payload["message_id"]] = {"envelope": payload, "delivery_status": "QUEUED"}
+            elif kind == "DELIVERY_ACK":
+                message = expected_messages.get(payload.get("message_id"))
+                if not message or payload.get("status") != "DELIVERED":
+                    raise AuditFailure("invalid delivery audit record")
+                message["delivery_status"] = "DELIVERED"
+            elif kind == "KEY_REGISTERED":
+                expected_users[payload["username"]] = (payload["exchange_public"], payload["signing_public"])
+            elif kind == "SECURITY_EVENT":
+                expected_events.append(payload)
+        if (count, previous) != (int(head[0]), head[1]):
+            raise AuditFailure("audit head differs from records")
+        if anchor and (count < anchor["record_count"] or anchor_tip != anchor["record_hash"]):
+            raise AuditFailure("audit differs from independently saved checkpoint")
+        cur.execute("SELECT message_id, conversation_id, sender_id, receiver_id, sequence_number, signed_timestamp, envelope, delivery_status FROM cc_messages")
+        actual_messages = {}
+        for message_id, conversation, sender, receiver, sequence, signed_time, raw_envelope, status in cur.fetchall():
+            envelope = _payload(raw_envelope)
+            if (conversation, sender, receiver, sequence, signed_time) != (envelope.get("conversation_id"), envelope.get("sender_id"), envelope.get("receiver_id"), envelope.get("sequence_number"), envelope.get("timestamp")):
+                raise AuditFailure("message columns differ from encrypted envelope")
+            actual_messages[message_id] = {"envelope": envelope, "delivery_status": status}
+        if actual_messages != expected_messages:
+            raise AuditFailure("message table differs from audited envelopes or delivery status")
+        cur.execute("SELECT username, exchange_public, signing_public FROM cc_users")
+        actual_users = {name: (bytes(exchange).hex(), bytes(signing).hex()) for name, exchange, signing in cur.fetchall()}
+        if actual_users != expected_users:
+            raise AuditFailure("registered public keys differ from audit trail")
+        cur.execute("SELECT sender_id, conversation_id, highest_sequence FROM cc_message_state")
+        actual_state = {(sender, conversation): int(sequence) for sender, conversation, sequence in cur.fetchall()}
+        expected_state = {}
+        for entry in expected_messages.values():
+            envelope = entry["envelope"]
+            key = (envelope["sender_id"], envelope["conversation_id"])
+            expected_state[key] = max(expected_state.get(key, 0), envelope["sequence_number"])
+        if actual_state != expected_state:
+            raise AuditFailure("replay counters differ from audited messages")
+        cur.execute("SELECT timestamp, event_type, actor, message_id, detail_json FROM cc_security_events ORDER BY id")
+        actual_events = [{"timestamp": t, "event_type": k, "actor": a, "message_id": m, "detail": _payload(detail)}
+                         for t, k, a, m, detail in cur.fetchall()]
+        if actual_events != expected_events:
+            raise AuditFailure("security events differ from audit trail")
+        return {"record_count": count, "record_hash": previous}
+
+    def verify(self):
+        conn = self.connect()
+        try:
+            return self._verify(conn.cursor())
+        finally:
+            conn.close()
+
+    def checkpoint(self, path: Path):
+        value = self.verify()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(path.name + ".tmp")
+        temporary.write_text(json.dumps(value, sort_keys=True, indent=2), encoding="utf-8")
+        os.replace(temporary, path)
+        path.chmod(0o600)
+        return value
+
+    def _append_audit(self, cur, kind: str, payload: dict):
+        cur.execute("SELECT record_count FROM cc_audit_head WHERE singleton = 1 FOR UPDATE")
+        if cur.fetchone() is None:
+            raise AuditFailure("audit head missing")
+        head = self._verify(cur)
+        number = head["record_count"] + 1
+        timestamp = _now()
+        digest = _digest(number, timestamp, kind, payload, head["record_hash"])
+        cur.execute("INSERT INTO cc_audit_records VALUES (%s, %s, %s, %s, %s, %s)",
+                    (number, timestamp, kind, canonical(payload).decode(), head["record_hash"], digest))
+        cur.execute("UPDATE cc_audit_head SET record_count = %s, record_hash = %s WHERE singleton = 1", (number, digest))
+
+    def identity(self, username: str):
+        conn = self.connect()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT exchange_public, signing_public FROM cc_users WHERE username = %s", (username,))
+            row = cur.fetchone()
+            return {"exchange_public": bytes(row[0]).hex(), "signing_public": bytes(row[1]).hex()} if row else None
+        finally:
+            conn.close()
+
+    def register_identity(self, username: str, exchange: bytes, signing: bytes):
+        if username not in {"alice", "bob"} or len(exchange) != 32 or len(signing) != 32:
+            raise ValueError("invalid identity registration")
+        conn = self.connect()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT exchange_public, signing_public FROM cc_users WHERE username = %s FOR UPDATE", (username,))
+            row = cur.fetchone()
+            if row:
+                if bytes(row[0]) != exchange or bytes(row[1]) != signing:
+                    raise ValueError("registered public key mismatch; key substitution rejected")
+            else:
+                self._append_audit(cur, "KEY_REGISTERED", {"username": username, "exchange_public": exchange.hex(), "signing_public": signing.hex()})
+                cur.execute("INSERT INTO cc_users VALUES (%s, %s, %s, %s)", (username, exchange, signing, _now()))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def event(self, event_type: str, actor: str, message_id: str | None, detail: dict):
+        if not isinstance(message_id, str) or len(message_id) > 64:
+            message_id = None
+        conn = self.connect()
+        try:
+            cur = conn.cursor()
+            timestamp = _now()
+            self._append_audit(cur, "SECURITY_EVENT", {"timestamp": timestamp, "event_type": event_type,
+                                                       "actor": actor, "message_id": message_id, "detail": detail})
+            cur.execute("INSERT INTO cc_security_events (timestamp, event_type, actor, message_id, detail_json) VALUES (%s, %s, %s, %s, %s)",
+                        (timestamp, event_type, actor, message_id, canonical(detail).decode()))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def accept(self, envelope: dict):
+        conn = self.connect()
+        try:
+            cur = conn.cursor()
+            # A single admission lock also prevents concurrent first-use
+            # INSERT IGNORE operations from deadlocking on the state row.
+            cur.execute("SELECT record_count FROM cc_audit_head WHERE singleton = 1 FOR UPDATE")
+            if cur.fetchone() is None:
+                raise AuditFailure("audit head missing")
+            self._verify(cur)
+            state = self._chat_state(cur)
+            if state["blocked"] or envelope["session_id"] != state["session_id"]:
+                conn.rollback()
+                return False, "chat blocked or session changed"
+            sender, conversation, number = envelope["sender_id"], envelope["conversation_id"], envelope["sequence_number"]
+            cur.execute("SELECT highest_sequence FROM cc_message_state WHERE sender_id = %s AND conversation_id = %s FOR UPDATE", (sender, conversation))
+            state_row = cur.fetchone()
+            highest = int(state_row[0]) if state_row else 0
+            cur.execute("SELECT 1 FROM cc_messages WHERE message_id = %s", (envelope["message_id"],))
+            if cur.fetchone() or number <= highest:
+                conn.rollback()
+                return False, "duplicate message ID or stale sequence"
+            timestamp = _now()
+            self._append_audit(cur, "ENCRYPTED_MESSAGE", envelope)
+            cur.execute("""INSERT INTO cc_messages
+                (message_id, conversation_id, sender_id, receiver_id, sequence_number, signed_timestamp, received_at, envelope, delivery_status)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'QUEUED')""",
+                (envelope["message_id"], conversation, sender, envelope["receiver_id"], number,
+                 envelope["timestamp"], timestamp, canonical(envelope).decode()))
+            if state_row:
+                cur.execute("UPDATE cc_message_state SET highest_sequence = %s WHERE sender_id = %s AND conversation_id = %s",
+                            (number, sender, conversation))
+            else:
+                cur.execute("INSERT INTO cc_message_state VALUES (%s, %s, %s)", (sender, conversation, number))
+            conn.commit()
+            return True, "accepted"
+        except mysql.connector.IntegrityError:
+            conn.rollback()
+            return False, "duplicate message ID or sequence"
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def mark_delivered(self, message_id: str):
+        conn = self.connect()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT delivery_status FROM cc_messages WHERE message_id = %s FOR UPDATE", (message_id,))
+            row = cur.fetchone()
+            if not row or row[0] == "DELIVERED":
+                conn.rollback()
+                return
+            self._append_audit(cur, "DELIVERY_ACK", {"message_id": message_id, "status": "DELIVERED"})
+            cur.execute("UPDATE cc_messages SET delivery_status = 'DELIVERED' WHERE message_id = %s", (message_id,))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def message(self, message_id: str):
+        conn = self.connect()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT envelope, delivery_status FROM cc_messages WHERE message_id = %s", (message_id,))
+            row = cur.fetchone()
+            return {"envelope": _payload(row[0]), "delivery_status": row[1]} if row else None
+        finally:
+            conn.close()
+
+    def pending(self, username: str):
+        conn = self.connect()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT envelope FROM cc_messages WHERE receiver_id = %s AND delivery_status = 'QUEUED' ORDER BY received_at, message_id", (username,))
+            return [_payload(row[0]) for row in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def highest_sequence(self, username: str) -> int:
+        conn = self.connect()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT highest_sequence FROM cc_message_state WHERE sender_id = %s AND conversation_id = 'alice-bob'", (username,))
+            row = cur.fetchone()
+            return int(row[0]) if row else 0
+        finally:
+            conn.close()
+
+    def _chat_state(self, cur):
+        cur.execute("SELECT event_type, detail_json FROM cc_security_events WHERE event_type IN ('CHAT_BLOCKED', 'CHAT_REKEYED') ORDER BY id")
+        generation, blocked = 1, False
+        for event_type, raw in cur.fetchall():
+            if event_type == "CHAT_BLOCKED":
+                blocked = True
+            elif event_type == "CHAT_REKEYED":
+                generation = int(_payload(raw)["generation"])
+                blocked = False
+        return {"session_id": f"alice-bob:{generation}", "generation": generation, "blocked": blocked}
+
+    def chat_state(self):
+        conn = self.connect()
+        try:
+            return self._chat_state(conn.cursor())
+        finally:
+            conn.close()
+
+    def messages(self, username: str):
+        conn = self.connect()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT envelope, delivery_status FROM cc_messages WHERE sender_id = %s OR receiver_id = %s ORDER BY received_at, message_id", (username, username))
+            return [{"envelope": _payload(raw), "delivery_status": status} for raw, status in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def captured(self):
+        conn = self.connect()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT envelope, delivery_status FROM cc_messages ORDER BY received_at DESC, message_id DESC LIMIT 100")
+            return [{"envelope": _payload(raw), "delivery_status": status} for raw, status in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def events(self):
+        conn = self.connect()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT timestamp, event_type, actor, message_id, detail_json FROM cc_security_events ORDER BY id DESC LIMIT 100")
+            return [{"timestamp": t, "event_type": k, "actor": a, "message_id": m, "detail": _payload(d)}
+                    for t, k, a, m, d in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def stats(self):
+        conn = self.connect()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT delivery_status, COUNT(*) FROM cc_messages GROUP BY delivery_status")
+            statuses = dict(cur.fetchall())
+            cur.execute("SELECT event_type, COUNT(*) FROM cc_security_events GROUP BY event_type")
+            events = dict(cur.fetchall())
+            cur.execute("""SELECT COUNT(*) FROM cc_security_events WHERE event_type = 'TAMPERING'
+                AND JSON_UNQUOTE(JSON_EXTRACT(detail_json, '$.reason')) LIKE '%signature%'""")
+            signature_failures = int(cur.fetchone()[0])
+            return {"messages_sent": sum(statuses.values()), "messages_delivered": statuses.get("DELIVERED", 0),
+                    "signatures_verified": sum(statuses.values()), "signature_failures": signature_failures,
+                    "events": events, "audit": self._verify(cur)}
+        finally:
+            conn.close()
+
+    def audit_rows(self):
+        conn = self.connect()
+        try:
+            cur = conn.cursor()
+            self._verify(cur)
+            cur.execute("SELECT number, timestamp, kind, previous_hash, record_hash FROM cc_audit_records ORDER BY number DESC LIMIT 100")
+            return [{"number": n, "timestamp": t, "kind": k, "previous_hash": p, "record_hash": h}
+                    for n, t, k, p, h in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def delete_audit_row_for_demo(self, number: int):
+        if not isinstance(number, int) or isinstance(number, bool) or number < 1:
+            raise ValueError("invalid audit record number")
+        conn = self.connect()
+        try:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM cc_audit_records WHERE number = %s", (number,))
+            if cur.rowcount != 1:
+                conn.rollback()
+                raise ValueError("audit record does not exist")
+            conn.commit()
+        finally:
+            conn.close()

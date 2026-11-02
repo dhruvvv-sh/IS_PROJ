@@ -25,6 +25,18 @@ material is included in that log.
 
 See [UI_OBSERVATION_GUIDE.md](UI_OBSERVATION_GUIDE.md) for the local
 cryptographic observation interface and its demonstration-mode boundaries.
+See [VERCEL_SETUP.md](VERCEL_SETUP.md) for the HTTP attack laboratory and deployment.
+
+## Three-role HTTP laboratory
+
+Alice and Bob log in, encrypt and sign in their browsers, and send envelopes through
+FastAPI HTTP endpoints to persistent MySQL. The browser refreshes chat and security
+events every three seconds. Mallory logs in separately to replay, tamper with, and
+inspect captured ciphertext. Rejected tampering, replay, or impersonation blocks
+the chat. Alice or Bob can start a new session with a changed key-derivation context.
+This derives a new AES key from the existing X25519 identity keys; it does not rotate
+those identity keys or provide forward secrecy. The full signed envelopes and
+security events are visible to Alice and Bob. See [VERCEL_SETUP.md](VERCEL_SETUP.md).
 See [ALGORITHMS_AND_DATA_FLOW.md](ALGORITHMS_AND_DATA_FLOW.md) for the
 implemented algorithms, process order, and input/output byte sizes.
 See [VIVA_QUESTIONS_AND_ANSWERS.md](VIVA_QUESTIONS_AND_ANSWERS.md) for concise
