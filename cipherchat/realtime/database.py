@@ -142,6 +142,11 @@ class Database:
                 message["delivery_status"] = "DELIVERED"
             elif kind == "KEY_REGISTERED":
                 expected_users[payload["username"]] = (payload["exchange_public"], payload["signing_public"])
+            elif kind == "KEY_ROTATED":
+                old_keys = expected_users.get(payload["username"])
+                if old_keys is None or hashlib.sha256(bytes.fromhex(old_keys[1])).hexdigest() != payload["old_fingerprint"]:
+                    raise AuditFailure("invalid identity rotation record")
+                expected_users[payload["username"]] = (payload["exchange_public"], payload["signing_public"])
             elif kind == "SECURITY_EVENT":
                 expected_events.append(payload)
         if (count, previous) != (int(head[0]), head[1]):
@@ -215,7 +220,8 @@ class Database:
         finally:
             conn.close()
 
-    def claim_session(self, username: str, token_hash: str, lease_seconds: int = 30) -> bool:
+    def claim_session(self, username: str, token_hash: str, lease_seconds: int = 30,
+                      replace_existing: bool = False) -> bool:
         """Atomically reserve one live browser session for a role."""
         conn = self.connect()
         try:
@@ -224,7 +230,7 @@ class Database:
             cur.execute("SELECT token_hash, last_seen FROM cc_role_sessions WHERE username = %s FOR UPDATE", (username,))
             row = cur.fetchone()
             now = time.time()
-            if row and float(row[1]) > now - lease_seconds:
+            if row and float(row[1]) > now - lease_seconds and not replace_existing:
                 conn.rollback()
                 return False
             cur.execute("UPDATE cc_role_sessions SET token_hash = %s, last_seen = %s WHERE username = %s",
@@ -285,6 +291,49 @@ class Database:
                 self._append_audit(cur, "KEY_REGISTERED", {"username": username, "exchange_public": exchange.hex(), "signing_public": signing.hex()})
                 cur.execute("INSERT INTO cc_users VALUES (%s, %s, %s, %s)", (username, exchange, signing, _now()))
             conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def rotate_identity(self, username: str, exchange: bytes, signing: bytes):
+        """Move a role to a new browser and invalidate the previous chat session."""
+        if username not in {"alice", "bob"} or len(exchange) != 32 or len(signing) != 32:
+            raise ValueError("invalid identity rotation")
+        conn = self.connect()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT record_count FROM cc_audit_head WHERE singleton = 1 FOR UPDATE")
+            if cur.fetchone() is None:
+                raise AuditFailure("audit head missing")
+            self._verify(cur)
+            state = self._chat_state(cur)
+            if state["state"] != "SECURE":
+                raise ValueError("finish security recovery before moving this role")
+            cur.execute("SELECT exchange_public, signing_public FROM cc_users WHERE username = %s FOR UPDATE", (username,))
+            row = cur.fetchone()
+            if not row:
+                raise ValueError("identity is not registered")
+            if bytes(row[0]) == exchange and bytes(row[1]) == signing:
+                raise ValueError("new browser must generate a different identity")
+            old_fingerprint = hashlib.sha256(bytes(row[1])).hexdigest()
+            new_fingerprint = hashlib.sha256(signing).hexdigest()
+            self._append_audit(cur, "KEY_ROTATED", {"username": username, "exchange_public": exchange.hex(),
+                                                     "signing_public": signing.hex(), "old_fingerprint": old_fingerprint})
+            cur.execute("UPDATE cc_users SET exchange_public = %s, signing_public = %s, registered_at = %s WHERE username = %s",
+                        (exchange, signing, _now(), username))
+            timestamp = _now()
+            detail = {"username": username, "old_fingerprint": old_fingerprint,
+                      "new_fingerprint": new_fingerprint, "generation": state["generation"] + 1,
+                      "reason": "explicit new-browser identity rotation"}
+            event = {"timestamp": timestamp, "event_type": "CHAT_REKEYED", "actor": username,
+                     "message_id": None, "detail": detail}
+            self._append_audit(cur, "SECURITY_EVENT", event)
+            cur.execute("INSERT INTO cc_security_events (timestamp, event_type, actor, message_id, detail_json) VALUES (%s, %s, %s, %s, %s)",
+                        (timestamp, "CHAT_REKEYED", username, None, canonical(detail).decode()))
+            conn.commit()
+            return detail
         except Exception:
             conn.rollback()
             raise

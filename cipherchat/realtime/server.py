@@ -164,8 +164,8 @@ async def login(request: Request):
     if not isinstance(username, str) or username not in USERS or not hmac.compare_digest(str(data.get("password", "")), _password(username)):
         raise HTTPException(401, "invalid credentials")
     token = _token(username)
-    if not _db(request).claim_session(username, _token_hash(token)):
-        raise HTTPException(409, f"{username.capitalize()} is already online. Log out there or wait 30 seconds after closing that browser.")
+    if not _db(request).claim_session(username, _token_hash(token), replace_existing=data.get("replace_existing") is True):
+        raise HTTPException(409, f"{username.capitalize()} is already online. Log out there, wait 30 seconds, or take over this role.")
     from fastapi.responses import JSONResponse
     response = JSONResponse({"username": username})
     response.set_cookie("cipherchat_session", token, httponly=True, samesite="strict",
@@ -223,6 +223,27 @@ async def register(request: Request):
                                    {"incident_type": "KEY_SUBSTITUTION", "reason": str(error)})
         raise HTTPException(409, str(error)) from error
     return {"username": username, "keys": db.identity(username)}
+
+
+@app.post("/api/identity/rotate")
+async def rotate_identity(request: Request):
+    _same_origin(request)
+    username = _http_user(request)
+    if username == "mallory":
+        raise HTTPException(403, "Mallory has no chat identity")
+    db = _db(request)
+    _check(db)
+    data = await request.json()
+    if not isinstance(data, dict) or data.get("confirm_new_browser") is not True:
+        raise HTTPException(400, "explicit new-browser confirmation required")
+    try:
+        exchange = bytes.fromhex(data["exchange_public"])
+        signing = bytes.fromhex(data["signing_public"])
+        detail = db.rotate_identity(username, exchange, signing)
+    except (ValueError, KeyError, TypeError) as error:
+        raise HTTPException(409, str(error)) from error
+    return {"username": username, "keys": db.identity(username), "chat": db.chat_state(),
+            "old_fingerprint": detail["old_fingerprint"], "new_fingerprint": detail["new_fingerprint"]}
 
 
 @app.get("/api/history")

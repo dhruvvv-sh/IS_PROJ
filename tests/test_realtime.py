@@ -63,9 +63,9 @@ class MemoryDatabase:
     def migrate(self):
         pass
 
-    def claim_session(self, username, token_hash, lease_seconds=30):
+    def claim_session(self, username, token_hash, lease_seconds=30, replace_existing=False):
         row = self.sessions.get(username)
-        if row and row[1] > time.time() - lease_seconds:
+        if row and row[1] > time.time() - lease_seconds and not replace_existing:
             return False
         self.sessions[username] = (token_hash, time.time())
         return True
@@ -99,6 +99,22 @@ class MemoryDatabase:
             raise ValueError("registered public key mismatch")
         self.identities[who] = value
         self.audit.append({"number": len(self.audit) + 1, "kind": "KEY_REGISTERED", "record_hash": "a" * 64})
+
+    def rotate_identity(self, who, exchange, signing):
+        if self.chat_state()["state"] != "SECURE":
+            raise ValueError("finish security recovery before moving this role")
+        old = self.identities.get(who)
+        if not old:
+            raise ValueError("identity is not registered")
+        import hashlib
+        old_fingerprint = hashlib.sha256(bytes.fromhex(old["signing_public"])).hexdigest()
+        new_fingerprint = hashlib.sha256(signing).hexdigest()
+        self.identities[who] = {"exchange_public": exchange.hex(), "signing_public": signing.hex()}
+        self.audit.append({"number": len(self.audit) + 1, "kind": "KEY_ROTATED", "record_hash": "d" * 64})
+        detail = {"generation": self.chat_state()["generation"] + 1, "old_fingerprint": old_fingerprint,
+                  "new_fingerprint": new_fingerprint}
+        self.event("CHAT_REKEYED", who, None, detail)
+        return detail
 
     def event(self, event_type, actor, message_id, detail):
         self.security_events.append({"timestamp": "now", "event_type": event_type, "actor": actor,

@@ -33,12 +33,17 @@ HTTP API, see [CENTRAL_PC_SETUP.md](CENTRAL_PC_SETUP.md).
 Alice and Bob log in, encrypt and sign in their browsers, and send envelopes through
 FastAPI HTTP endpoints to persistent MySQL. The browser refreshes chat and security
 events every three seconds. Mallory logs in separately to replay, tamper with, and
-inspect captured ciphertext. Rejected tampering, replay, or impersonation blocks
-the chat. Alice or Bob can start a new session with a changed key-derivation context.
+inspect captured ciphertext. Rejected tampering, replay, or impersonation quarantines
+the chat. Alice or Bob verifies the audit and registered identities, then starts a
+new session with a changed key-derivation context.
 This derives a new AES key from the existing X25519 identity keys; it does not rotate
 those identity keys or provide forward secrecy. The full signed envelopes and
 security events are visible to Alice and Bob. The deployment and role-by-role
 testing steps are in [CENTRAL_PC_SETUP.md](CENTRAL_PC_SETUP.md).
+When a role moves to a different browser, its owner explicitly rotates that
+role's identity and starts a new chat. The other participant approves the new
+public-key fingerprint after comparing it outside CipherChat. Old messages
+remain encrypted for the old browser.
 See [ALGORITHMS_AND_DATA_FLOW.md](ALGORITHMS_AND_DATA_FLOW.md) for the
 implemented algorithms, process order, and input/output byte sizes.
 See [VIVA_QUESTIONS_AND_ANSWERS.md](VIVA_QUESTIONS_AND_ANSWERS.md) for concise

@@ -193,6 +193,48 @@ def test_expired_timestamp_duplicate_sequence_and_role_permissions(lab):
     assert client.get("/api/history").status_code == 401
 
 
+def test_explicit_role_takeover_replaces_only_the_previous_session(lab):
+    client, cookies, db, _, _ = lab
+    assert client.post("/api/login", json={"username": "bob", "password": "wrong",
+                                            "replace_existing": True}).status_code == 401
+    assert client.get("/api/me", cookies=cookies["bob"]).status_code == 200
+    assert client.post("/api/login", json={"username": "bob", "password": "bob-password"}).status_code == 409
+    replacement = client.post("/api/login", json={"username": "bob", "password": "bob-password",
+                                                     "replace_existing": True})
+    assert replacement.status_code == 200
+    new_cookie = {"cipherchat_session": replacement.cookies["cipherchat_session"]}
+    assert client.get("/api/me", cookies=cookies["bob"]).status_code == 401
+    assert client.get("/api/me", cookies=new_cookie).json()["username"] == "bob"
+    assert db.presence()["bob"] is True
+    assert client.post("/api/logout", cookies=new_cookie).status_code == 200
+    assert db.presence()["bob"] is False
+    assert client.post("/api/login", json={"username": "bob", "password": "bob-password"}).status_code == 200
+
+
+def test_new_browser_rotation_starts_new_session_and_preserves_key_audit(lab):
+    client, cookies, db, alice, bob = lab
+    old = envelope_for(alice, bob, sender="bob")
+    assert post(client, cookies, "bob", "/api/send", {"envelope": old}).json()["accepted"]
+    assert post(client, cookies, "mallory", "/api/identity/rotate", {}).status_code == 403
+    next_bob = Identity.create("bob")
+    request = {"exchange_public": next_bob.public_material()["public_key"],
+               "signing_public": next_bob.signing_public_key_bytes.hex()}
+    assert post(client, cookies, "bob", "/api/identity/rotate", request).status_code == 400
+    result = post(client, cookies, "bob", "/api/identity/rotate", {**request, "confirm_new_browser": True})
+    assert result.status_code == 200
+    assert result.json()["chat"]["session_id"] == "alice-bob:2"
+    assert result.json()["new_fingerprint"] != result.json()["old_fingerprint"]
+    assert db.identity("bob")["signing_public"] == next_bob.signing_public_key_bytes.hex()
+    assert any(row["kind"] == "KEY_ROTATED" for row in db.audit)
+    assert db.message(old["message_id"])["envelope"] == old
+    from cipherchat.realtime.protocol import validate_envelope
+    from cipherchat.realtime.protocol import EnvelopeError
+    with pytest.raises(EnvelopeError):
+        validate_envelope(old, next_bob.signing_public_key_bytes)
+    new = envelope_for(alice, next_bob, sender="bob", sequence=2, session_id="alice-bob:2")
+    assert post(client, cookies, "bob", "/api/send", {"envelope": new}).json()["accepted"] is True
+
+
 @pytest.mark.parametrize("path,payload,expected_status", [
     ("/api/login", [], 400),
     ("/api/login", {"username": [], "password": "x"}, 401),

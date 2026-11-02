@@ -17,14 +17,16 @@
       <div class="card login-card"><h2>Welcome back</h2><p class="muted">Choose your role and enter its password.</p>
         <form id="login-form"><label for="username">Identity</label><select id="username"><option value="alice">Alice</option><option value="bob">Bob</option><option value="mallory">Mallory</option></select>
           <label for="password">Password</label><input id="password" type="password" required autocomplete="current-password"><button class="primary login-button">Log in <span aria-hidden="true">→</span></button></form>
-        <p id="login-error" class="error" role="alert"></p>
+        <p id="login-error" class="error" role="alert"></p><button id="takeover-login" class="secondary" type="button" hidden>Sign out the other session and continue</button>
       </div>
     </section>
     <section id="workspace" hidden>
       <div class="workspace-top"><div><span class="eyebrow">SECURE WORKSPACE</span><h1 id="workspace-title">Conversation</h1></div><div class="toolbar"><span id="connection-status" class="pill">Connecting</span><span id="audit-status" class="pill">Checking audit</span><button id="rekey" class="secondary" hidden>Verify &amp; rekey</button><button id="logout" class="text-button">Log out</button></div></div>
+      <section id="identity-move" class="card" hidden><h2>Use this role on this browser</h2><p id="identity-move-text" class="muted"></p><p class="muted">This creates a new identity and chat session. Old messages stay encrypted for the previous browser. Ask your chat partner to compare and approve your new public-key fingerprint.</p><button id="move-identity" class="primary">Create new identity and chat</button><p id="move-error" class="error" role="alert"></p></section>
       <section id="chat-panel" class="chat-layout" hidden>
         <article class="card chat-card">
           <div class="conversation-head"><div class="avatar" id="peer-avatar">B</div><div class="conversation-info"><h2 id="chat-title">Bob</h2><div id="peer-status" class="peer-presence" aria-live="polite"><span class="presence-dot"></span>Checking status</div></div><span class="secure-label">✦ End-to-end encrypted</span></div>
+          <div id="peer-change" class="result" hidden><strong>Peer identity changed</strong><p>Compare this fingerprint with your chat partner using another channel before approving it:</p><p id="peer-change-fingerprint" class="fingerprint"></p><input id="peer-fingerprint-confirm" aria-label="Confirmed peer fingerprint" placeholder="Enter their 64-character fingerprint" autocomplete="off"><button id="approve-peer" class="secondary" type="button">Approve new peer key</button><p id="peer-change-error" class="error" role="alert"></p></div>
           <div id="messages" class="messages" aria-live="polite"><div class="empty-chat">Messages will appear here. Start the conversation below.</div></div>
           <form id="send-form" class="composer"><textarea id="message-text" placeholder="Write a message…" rows="2" required></textarea><div class="composer-bottom"><span>Encrypted and signed in this browser</span><button class="primary">Send message <span aria-hidden="true">↗</span></button></div></form>
         </article>

@@ -16,6 +16,51 @@ from tests.test_realtime import envelope_for
 
 
 @pytest.mark.skipif(os.getenv("CIPHERCHAT_TEST_MYSQL") != "1", reason="set CIPHERCHAT_TEST_MYSQL=1 for live MySQL integration test")
+def test_mysql_browser_handoff_keeps_one_session_and_audits_key_rotation():
+    db = Database(Config.from_env())
+    db.migrate()
+    conn = db.connect()
+    try:
+        cur = conn.cursor()
+        for table in ("cc_audit_records", "cc_messages", "cc_message_state", "cc_users", "cc_security_events", "cc_role_sessions"):
+            cur.execute("SELECT COUNT(*) FROM " + table)
+            assert cur.fetchone()[0] == 0, "live test requires an empty disposable demo database"
+    finally:
+        conn.close()
+    alice, old_bob, new_bob = Identity.create("alice"), Identity.create("bob"), Identity.create("bob")
+    try:
+        db.register_identity("alice", public_key_bytes(alice.public_key), alice.signing_public_key_bytes)
+        db.register_identity("bob", public_key_bytes(old_bob.public_key), old_bob.signing_public_key_bytes)
+        assert db.claim_session("bob", "a" * 64)
+        assert not db.claim_session("bob", "b" * 64)
+        assert db.claim_session("bob", "b" * 64, replace_existing=True)
+        assert not db.touch_session("bob", "a" * 64)
+        assert db.touch_session("bob", "b" * 64)
+        detail = db.rotate_identity("bob", public_key_bytes(new_bob.public_key), new_bob.signing_public_key_bytes)
+        assert detail["generation"] == 2
+        assert db.chat_state()["session_id"] == "alice-bob:2"
+        assert db.identity("bob")["signing_public"] == new_bob.signing_public_key_bytes.hex()
+        assert db.verify()["record_count"] == 4
+        old_message = envelope_for(alice, old_bob, sender="bob")
+        assert db.accept(old_message)[0] is False
+        new_message = envelope_for(alice, new_bob, sender="bob", session_id="alice-bob:2")
+        assert db.accept(new_message)[0] is True
+        assert db.verify()["record_count"] == 5
+        db.release_session("bob", "b" * 64)
+        assert db.presence()["bob"] is False
+    finally:
+        conn = db.connect()
+        try:
+            cur = conn.cursor()
+            for table in ("cc_role_sessions", "cc_security_events", "cc_messages", "cc_message_state", "cc_users", "cc_audit_records"):
+                cur.execute("DELETE FROM " + table)
+            cur.execute("UPDATE cc_audit_head SET record_count=0, record_hash=%s WHERE singleton=1", (GENESIS,))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+@pytest.mark.skipif(os.getenv("CIPHERCHAT_TEST_MYSQL") != "1", reason="set CIPHERCHAT_TEST_MYSQL=1 for live MySQL integration test")
 def test_mysql_replay_survives_restart_concurrent_sequence_and_audit_tamper(tmp_path: Path):
     database = Database(Config.from_env())
     database.migrate()

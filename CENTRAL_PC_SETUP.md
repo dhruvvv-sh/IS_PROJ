@@ -58,9 +58,11 @@ Changing Vercel environment variables requires a new deployment, per
 Open `https://cipherchat-delta.vercel.app/` on three separate browser profiles
 or devices. Alice logs in on her MacBook, Bob on another computer, and Mallory
 on a third. Alice and Bob each generate their own private keys in their browser
-profile. If a role's identity was registered from another browser earlier, that
-new browser cannot recover its old private key; use the original profile or a
-fresh demo database.
+profile. If a role was registered in another browser, its new browser cannot
+recover the old private key. After logging in, choose **Create new identity and
+chat**. The partner must compare the displayed fingerprint with the new
+browser's fingerprint using another channel and explicitly approve it.
+Old messages remain encrypted for the original browser.
 
 1. Bob sends a message. Alice sees it after the next poll and the delivery
    status changes after her browser verifies it.
@@ -69,13 +71,16 @@ fresh demo database.
 3. Mallory selects the message and runs replay, tampering, impersonation,
    stale delivery, eavesdropping, and key-substitution tests. Alice and Bob see
    recorded incidents after the next poll.
-4. Replay, tampering, and impersonation block the chat. Alice or Bob can start
-   a new session. Destructive audit-record deletion is disabled on the central
+4. Replay, tampering, and impersonation quarantine the chat. Alice or Bob can
+   verify the incident and rekey. Failed verification blocks the relationship.
+   Destructive audit-record deletion is disabled on the central
    deployment because it requires restoring the database.
 
 The backend checks role permissions independently of the UI. A role has one
 active login. Logging out releases it immediately; after a closed browser,
-presence and the role lock expire in 30 seconds.
+presence and the role lock expire in 30 seconds. A password holder can select
+**Sign out the other session and continue** to take over immediately; the
+previous browser's session becomes invalid.
 
 ## Verification and limits
 

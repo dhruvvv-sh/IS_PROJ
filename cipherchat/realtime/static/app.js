@@ -1,7 +1,7 @@
 const $ = id => document.getElementById(id);
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
-let me = null, keys = null, peer = null, captured = [], chat = null, seenMessages = new Set(), envelopes = new Map(), refreshTimer = null, releaseRoleLock = null;
+let me = null, keys = null, peer = null, pendingPeer = null, captured = [], chat = null, seenMessages = new Set(), envelopes = new Map(), refreshTimer = null, releaseRoleLock = null;
 
 async function reserveTab(username) {
   if (!navigator.locks) return;
@@ -70,16 +70,25 @@ async function keyRecord(username, newValue) {
     });
   } finally { db.close(); }
 }
+async function createKeys() {
+  const exchange = await crypto.subtle.generateKey('X25519', false, ['deriveBits']);
+  const signing = await crypto.subtle.generateKey('Ed25519', false, ['sign','verify']);
+  return {exchange, signing,
+    exchange_public:hex(await crypto.subtle.exportKey('raw', exchange.publicKey)),
+    signing_public:hex(await crypto.subtle.exportKey('raw', signing.publicKey))};
+}
 async function prepareKeys() {
   const registered = (await api(`/api/identity/${me}`)).keys;
   keys = await keyRecord(me);
-  if (!keys && registered) throw new Error('This account already has public keys. Use its original browser profile; private keys cannot be recovered from the server.');
+  if (registered && (!keys || keys.exchange_public !== registered.exchange_public || keys.signing_public !== registered.signing_public)) {
+    keys = null;
+    $('identity-move-text').textContent = `${me[0].toUpperCase()}${me.slice(1)} already has keys on another browser. You are signed in, but this browser cannot decrypt with those keys.`;
+    $('identity-move').hidden = false;
+    $('chat-panel').hidden = true;
+    return false;
+  }
   if (!keys) {
-    const exchange = await crypto.subtle.generateKey('X25519', false, ['deriveBits']);
-    const signing = await crypto.subtle.generateKey('Ed25519', false, ['sign','verify']);
-    keys = {exchange, signing,
-      exchange_public:hex(await crypto.subtle.exportKey('raw', exchange.publicKey)),
-      signing_public:hex(await crypto.subtle.exportKey('raw', signing.publicKey))};
+    keys = await createKeys();
     await keyRecord(me, keys);
   }
   await api('/api/identity', {method:'POST', headers:{'Content-Type':'application/json'},
@@ -87,6 +96,7 @@ async function prepareKeys() {
   const fingerprint = hex(await crypto.subtle.digest('SHA-256', unhex(keys.signing_public)));
   $('fingerprints').textContent = `Your Ed25519 public-key fingerprint: ${fingerprint}`;
   await refreshPeer();
+  return true;
 }
 async function refreshPeer() {
   if (!me || me === 'mallory') return;
@@ -98,12 +108,17 @@ async function refreshPeer() {
     const material = `${found.exchange_public}:${found.signing_public}`;
     if (pin && pin !== material) {
       peer = null;
-      status('peer-status', 'PEER KEY CHANGED · CHAT BLOCKED', 'bad');
-      throw new Error('Peer public key differs from the locally pinned value');
+      pendingPeer = found;
+      $('peer-change-fingerprint').textContent = hex(await crypto.subtle.digest('SHA-256', unhex(found.signing_public)));
+      $('peer-change').hidden = false;
+      $('send-form').querySelector('button').disabled = true;
+      return;
     }
     if (!pin) localStorage.setItem(pinKey, material);
   }
   peer = found;
+  pendingPeer = null;
+  $('peer-change').hidden = true;
 }
 async function sessionKey() {
   if (!peer) await refreshPeer();
@@ -195,7 +210,7 @@ async function refreshDashboard() {
     const legacy = recovery === 'BLOCKED' && chat.incident_type === 'LEGACY_BLOCK';
     $('rekey').hidden = me === 'mallory' || (recovery !== 'QUARANTINED' && !legacy) || !data.audit_valid;
     $('rekey').textContent = legacy ? 'Start new chat' : 'Verify & rekey';
-    $('send-form').querySelector('button').disabled = chat.blocked || !data.audit_valid;
+    $('send-form').querySelector('button').disabled = chat.blocked || !data.audit_valid || !keys || Boolean(pendingPeer);
     const counts = data.stats || {};
     const metrics = [['Sent',counts.messages_sent || 0],['Delivered',counts.messages_delivered || 0],
       ['Signatures verified',counts.signatures_verified || 0],['Failed signatures',counts.signature_failures || 0],
@@ -204,7 +219,10 @@ async function refreshDashboard() {
       ['Key substitution',counts.events?.KEY_SUBSTITUTION || 0]];
     $('counters').innerHTML = metrics.map(([label,value]) => `<div class="counter"><strong>${value}</strong><span>${label}</span></div>`).join('');
     $('events').innerHTML = (data.events || []).map(e => `<div class="event"><b>${escapeHtml(e.event_type)}</b> · ${escapeHtml(e.actor)} · ${escapeHtml(e.message_id || '')}<time>${escapeHtml(e.timestamp)}</time><br>${escapeHtml(JSON.stringify(e.detail || {}))}</div>`).join('');
-  } catch (error) { status('audit-status', `Audit unavailable: ${error.message}`, 'bad'); }
+  } catch (error) {
+    if (error.message.includes('session expired or replaced')) throw error;
+    status('audit-status', `Audit unavailable: ${error.message}`, 'bad');
+  }
 }
 async function refreshCaptured() {
   captured = (await api('/api/history')).messages;
@@ -217,6 +235,7 @@ async function loadHistory() {
     const e = row.envelope;
     addDelivery(e.message_id, row.delivery_status);
     addEvidence(e);
+    if (pendingPeer && e.session_id === chat.session_id) continue;
     if (seenMessages.has(e.message_id)) continue;
     seenMessages.add(e.message_id);
     if (e.receiver_id === me && e.session_id === chat.session_id) await receive(e, true);
@@ -235,6 +254,18 @@ async function refreshAudit() {
   $('audit-records').innerHTML = records.map(row => `<option value="${row.number}">#${row.number} · ${escapeHtml(row.kind)} · ${escapeHtml(row.record_hash.slice(0, 12))}</option>`).join('');
   if (records.length) $('audit-records').selectedIndex = 0;
 }
+function startPolling() {
+  if (refreshTimer) clearInterval(refreshTimer);
+  refreshTimer = setInterval(async () => {
+    try {
+      await refreshDashboard();
+      if (me !== 'mallory' && keys) { await refreshPeer(); await loadHistory(); }
+    } catch (error) {
+      if (error.message.includes('session expired or replaced')) { location.reload(); return; }
+      status('connection-status', `Refresh failed: ${error.message}`, 'bad');
+    }
+  }, 3000);
+}
 async function start(username) {
   if (!crypto.subtle || !indexedDB) throw new Error('Use HTTPS or localhost in a browser supporting Web Crypto and IndexedDB');
   me = username; $('login-panel').hidden = true; $('workspace').hidden = false;
@@ -242,24 +273,64 @@ async function start(username) {
   $('session-label').textContent = username.toUpperCase();
   $('workspace-title').textContent = username === 'mallory' ? 'Attack laboratory' : 'Messages';
   $('chat-panel').hidden = username === 'mallory'; $('mallory-panel').hidden = username !== 'mallory';
-  if (username !== 'mallory') { const other = username === 'alice' ? 'Bob' : 'Alice'; $('chat-title').textContent = other; $('peer-avatar').textContent = other[0]; await prepareKeys(); await syncSequence(); await loadHistory(); }
+  if (username !== 'mallory') {
+    const other = username === 'alice' ? 'Bob' : 'Alice';
+    $('chat-title').textContent = other; $('peer-avatar').textContent = other[0];
+    if (await prepareKeys()) { await syncSequence(); await loadHistory(); }
+  }
   else { await refreshCaptured(); await refreshAudit(); }
   status('connection-status', 'HTTP refresh', 'good'); await refreshDashboard();
-  refreshTimer = setInterval(async () => {
-    try { await refreshDashboard(); if (me !== 'mallory') { await refreshPeer(); await loadHistory(); } }
-    catch (error) { if (error.message.includes('session expired or replaced')) { location.reload(); return; } status('connection-status', `Refresh failed: ${error.message}`, 'bad'); }
-  }, 3000);
+  startPolling();
 }
-$('login-form').onsubmit = async event => {
-  event.preventDefault(); showError('');
+async function loginAttempt(replaceExisting = false) {
+  showError(''); $('takeover-login').hidden = true;
   let loggedIn = false;
   try {
     await reserveTab($('username').value);
     const response = await api('/api/login', {method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({username:$('username').value,password:$('password').value})});
+      body:JSON.stringify({username:$('username').value,password:$('password').value,replace_existing:replaceExisting})});
     loggedIn = true;
     await start(response.username);
-  } catch (error) { if (loggedIn) await api('/api/logout', {method:'POST'}).catch(() => {}); freeTab(); me = null; showError(error.message); $('login-panel').hidden = false; $('workspace').hidden = true; }
+  } catch (error) {
+    if (loggedIn) await api('/api/logout', {method:'POST'}).catch(() => {});
+    freeTab(); me = null; showError(error.message);
+    $('takeover-login').hidden = !error.message.includes('already online');
+    $('login-panel').hidden = false; $('workspace').hidden = true;
+  }
+}
+$('login-form').onsubmit = event => { event.preventDefault(); loginAttempt(); };
+$('takeover-login').onclick = () => loginAttempt(true);
+$('move-identity').onclick = async () => {
+  $('move-error').textContent = '';
+  $('move-identity').disabled = true;
+  try {
+    const replacement = await createKeys();
+    const result = await api('/api/identity/rotate', {method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({exchange_public:replacement.exchange_public,
+        signing_public:replacement.signing_public, confirm_new_browser:true})});
+    await keyRecord(me, replacement);
+    keys = replacement;
+    chat = result.chat;
+    $('fingerprints').textContent = `Your Ed25519 public-key fingerprint: ${result.new_fingerprint}`;
+    $('identity-move').hidden = true;
+    $('chat-panel').hidden = false;
+    await refreshPeer(); await syncSequence(); await loadHistory(); await refreshDashboard();
+  } catch (error) { $('move-error').textContent = error.message; }
+  finally { $('move-identity').disabled = false; }
+};
+$('approve-peer').onclick = async () => {
+  if (!pendingPeer) return;
+  const expected = $('peer-change-fingerprint').textContent.trim().toLowerCase();
+  if ($('peer-fingerprint-confirm').value.trim().toLowerCase() !== expected) {
+    $('peer-change-error').textContent = 'The fingerprint does not match. Verify it with your partner.';
+    return;
+  }
+  const other = me === 'alice' ? 'bob' : 'alice';
+  localStorage.setItem(`cipherchat-peer-pin-${me}-${other}`,
+    `${pendingPeer.exchange_public}:${pendingPeer.signing_public}`);
+  $('peer-fingerprint-confirm').value = '';
+  $('peer-change-error').textContent = '';
+  await refreshPeer(); await refreshDashboard();
 };
 $('send-form').onsubmit = async event => {
   event.preventDefault();
@@ -308,8 +379,14 @@ document.querySelectorAll('[data-attack]').forEach(button => button.onclick = as
   } catch (error) { $('attack-result').textContent = `Attack error: ${error.message}`; }
 });
 $('logout').onclick = async () => {
-  await api('/api/logout', {method:'POST'});
-  me = null; freeTab(); if (refreshTimer) clearInterval(refreshTimer); location.reload();
+  if (refreshTimer) clearInterval(refreshTimer);
+  try {
+    await api('/api/logout', {method:'POST'});
+    me = null; freeTab(); location.reload();
+  } catch (error) {
+    status('connection-status', `Log out failed: ${error.message}`, 'bad');
+    startPolling();
+  }
 };
 $('rekey').onclick = async () => {
   try {
