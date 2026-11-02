@@ -21,6 +21,7 @@ The previous local `cipherchat` schema has a broken audit chain from an earlier
 record-deletion demonstration. The new `cipherchat_central` schema is clean;
 the old schema was left untouched. The local `.env.central` file is ignored by
 Git and contains the local MySQL credentials, login passwords, and proxy secret.
+For a fresh checkout, copy `.env.example` to `.env.central` and fill its secrets.
 
 In separate terminals, run:
 
