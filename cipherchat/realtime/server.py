@@ -8,6 +8,7 @@ import json
 import os
 import secrets
 import time
+from functools import lru_cache
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -81,8 +82,15 @@ STATIC.mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
+@lru_cache(maxsize=1)
+def _database() -> Database:
+    database = Database(Config.from_env())
+    database.migrate()
+    return database
+
+
 def _db(request: Request) -> Database:
-    return Database(Config.from_env())
+    return _database()
 
 
 def _check(db: Database):

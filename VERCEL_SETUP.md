@@ -7,8 +7,9 @@ required because Vercel function instances do not share memory or local files.
 
 ## Prepare the database
 
-Provision a MySQL 8 database reachable from Vercel, create a database and user,
-then run the migration from a machine that can reach it:
+Provision a MySQL 8 database reachable from Vercel, create a database and user.
+The app creates its tables on its first database request. You can also run the
+migration manually from a machine that can reach the database:
 
 ```bash
 python -m cipherchat.realtime.admin migrate
