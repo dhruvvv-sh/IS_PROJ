@@ -105,3 +105,25 @@ The recovery flow is `SECURE → SUSPECTED_ATTACK → QUARANTINED → VERIFYING 
 ## Worked size example
 
 With the ASCII plaintext `hello` (`N = 5` bytes), the AES-GCM ciphertext plus tag is **21 bytes**; its Base64 value is **28 ASCII bytes**. The nonce remains **12 raw / 16 Base64 bytes**, and the Ed25519 signature remains **64 raw / 88 Base64 bytes**. In one run with session ID `demo-session`, sender ID `alice`, and a UUID message ID, the AAD was **142 bytes**, the signing input was **245 bytes**, and the complete JSON envelope was **316 bytes**. Those last three counts change with IDs and sequence number.
+
+
+## Realtime browser interface (v3)
+
+The browser chat uses v3 signed envelopes and central MySQL persistence; the local
+v2 teaching path described above remains separate. Realtime incident evidence,
+replay counters, and delivery state are durable. Browser identity verification now
+hashes the UTF-8 string `cipherchat-identity-v1|<X25519 hex>:<Ed25519 hex>` with
+SHA-256 and displays its 64 lowercase hex digits. Both first-contact and changed
+keys require an out-of-band comparison before approval. The pin binds both keys.
+
+The browser derives historical keys with each envelope's session ID and previously
+verified peer material, when its own private identity remains available. A new
+context reuses identity keys and does not add forward secrecy. Private-key loss
+makes affected old history unavailable; the central database cannot recover it.
+
+Authenticated normal-send retries use an explicit request ID equal to the signed
+message ID and must match the stored envelope exactly. This returns an existing
+receipt without adding a message or incident. Mallory's replay endpoint still
+exercises replay rejection. A recipient sends an idempotent delivery ACK only
+after successful verification/decryption; network failure of that ACK is not a
+cryptographic rejection.

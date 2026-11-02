@@ -94,19 +94,21 @@ class DemonstrationController:
             }, "Pinned X25519 and Ed25519 public keys are exchanged; private identity keys remain hidden."),
             _event("KDF", "03", "HKDF SESSION KEY DERIVED", {
                 "algorithm": "HKDF-SHA-256", "domain": "cipherchat-v1",
-                "session_key": sender.key.hex(), "label": "LOCAL DEMONSTRATION VALUE",
-            }, "The ECDH output is processed by HKDF before use as an AES key."),
+                "session_key": f"sha256:{hashlib.sha256(sender.key).hexdigest()[:16]}... [REDACTED]",
+                "label": "LOCAL DEMONSTRATION FINGERPRINT",
+            }, "The ECDH output is processed by HKDF before use as an AES key; raw key is redacted from output."),
         ]
         return self.snapshot()
 
     def snapshot(self) -> dict[str, object]:
         sender = self.alice_sessions.sender if self.alice_sessions else None
         checkpoint = self.evidence.checkpoint()
+        session_key_display = f"sha256:{hashlib.sha256(sender.key).hexdigest()[:16]}... [REDACTED]" if sender else None
         return {
             "demonstration_mode": True,
             "session": {
                 "session_id": self.session_id, "key_exchange": "X25519", "kdf": "HKDF-SHA-256",
-                "encryption": "AES-256-GCM", "session_key": sender.key.hex() if sender else None,
+                "encryption": "AES-256-GCM", "session_key": session_key_display,
                 "alice_public_key": public_key_bytes(self.alice.public_key).hex() if self.alice else None,
                 "bob_public_key": public_key_bytes(self.bob.public_key).hex() if self.bob else None,
                 "alice_signing_public_key": self.alice.signing_public_key_bytes.hex() if self.alice else None,
@@ -141,7 +143,8 @@ class DemonstrationController:
             },
             "session": {
                 "session_id": self.session_id, "key_exchange": "X25519", "kdf": "HKDF-SHA-256",
-                "encryption": "AES-256-GCM", "session_key": sender.key.hex() if sender else None,
+                "encryption": "AES-256-GCM",
+                "session_key": f"sha256:{hashlib.sha256(sender.key).hexdigest()[:16]}... [REDACTED]" if sender else None,
                 "alice_public_key": public_key_bytes(self.alice.public_key).hex() if self.alice else None,
                 "bob_public_key": public_key_bytes(self.bob.public_key).hex() if self.bob else None,
                 "alice_signing_public_key": self.alice.signing_public_key_bytes.hex() if self.alice else None,
@@ -247,6 +250,7 @@ class _Handler(SimpleHTTPRequestHandler):
     audit_logs: list[dict[str, object]] = []
     live_log_path = LIVE_LOG_PATH
     live_log_lock = Lock()
+    controller_lock = Lock()
 
     def _log_request_json(self, method: str, path: str, status_code: int, duration_ms: float, client_ip: str, error: str | None = None) -> None:
         with self.live_log_lock:
@@ -266,15 +270,21 @@ class _Handler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         client_ip = self.client_address[0] if self.client_address else "unknown"
         if parsed.path == "/api/state":
-            self._json(self.controller.snapshot())
+            with self.controller_lock:
+                snapshot = self.controller.snapshot()
+            self._json(snapshot)
             self._log_request_json("GET", parsed.path, HTTPStatus.OK, (perf_counter_ns() - start_time) / 1_000_000, client_ip)
             return
         if parsed.path == "/api/reset":
-            self._json(self.controller.establish())
+            with self.controller_lock:
+                established = self.controller.establish()
+            self._json(established)
             self._log_request_json("GET", parsed.path, HTTPStatus.OK, (perf_counter_ns() - start_time) / 1_000_000, client_ip)
             return
         if parsed.path == "/api/logs":
-            self._json(self.controller.export_logs())
+            with self.controller_lock:
+                logs = self.controller.export_logs()
+            self._json(logs)
             self._log_request_json("GET", parsed.path, HTTPStatus.OK, (perf_counter_ns() - start_time) / 1_000_000, client_ip)
             return
         if parsed.path == "/api/audit-logs":
@@ -319,14 +329,15 @@ class _Handler(SimpleHTTPRequestHandler):
             if not isinstance(payload, dict):
                 raise ValueError("request payload must be a JSON object")
 
-            if parsed.path == "/api/send":
-                response = self.controller.send(payload.get("message", ""), payload.get("sender", "alice"))
-            elif parsed.path == "/api/attack":
-                response = self.controller.attack(payload.get("attack", ""))
-            else:
-                self.send_error(HTTPStatus.NOT_FOUND)
-                self._log_request_json("POST", parsed.path, HTTPStatus.NOT_FOUND, (perf_counter_ns() - start_time) / 1_000_000, client_ip, "endpoint not found")
-                return
+            with self.controller_lock:
+                if parsed.path == "/api/send":
+                    response = self.controller.send(payload.get("message", ""), payload.get("sender", "alice"))
+                elif parsed.path == "/api/attack":
+                    response = self.controller.attack(payload.get("attack", ""))
+                else:
+                    self.send_error(HTTPStatus.NOT_FOUND)
+                    self._log_request_json("POST", parsed.path, HTTPStatus.NOT_FOUND, (perf_counter_ns() - start_time) / 1_000_000, client_ip, "endpoint not found")
+                    return
 
             self._json(response)
             self._log_request_json("POST", parsed.path, HTTPStatus.OK, (perf_counter_ns() - start_time) / 1_000_000, client_ip)
@@ -336,8 +347,11 @@ class _Handler(SimpleHTTPRequestHandler):
 
     def _json(self, payload: dict[str, object], status: HTTPStatus = HTTPStatus.OK) -> None:
         body = json.dumps(payload).encode("utf-8")
-        self.send_response(status); self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def translate_path(self, path: str) -> str:
         if path.startswith("/api/"): return str(STATIC_DIR / "index.html")

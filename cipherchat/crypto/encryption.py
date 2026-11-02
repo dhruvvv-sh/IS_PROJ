@@ -22,11 +22,22 @@ def _validate_key(key: bytes) -> None:
         raise ValueError("AES-256-GCM requires a 32-byte key")
 
 
-def encrypt(key: bytes, plaintext: bytes, associated_data: bytes) -> Ciphertext:
+def generate_nonce(counter: int | None = None) -> bytes:
+    """Generate a 96-bit nonce. If counter is provided, uses 4-byte counter + 8-byte random prefix."""
+    if counter is not None:
+        return (counter & 0xFFFFFFFF).to_bytes(4, byteorder="big") + os.urandom(8)
+    return os.urandom(NONCE_BYTES)
+
+
+def encrypt(key: bytes, plaintext: bytes, associated_data: bytes, nonce: bytes | None = None) -> Ciphertext:
     _validate_key(key)
     if not isinstance(plaintext, bytes) or not isinstance(associated_data, bytes):
         raise TypeError("plaintext and associated_data must be bytes")
-    nonce = os.urandom(NONCE_BYTES)  # fresh nonce for every operation
+    if nonce is not None:
+        if not isinstance(nonce, bytes) or len(nonce) != NONCE_BYTES:
+            raise ValueError(f"nonce must be {NONCE_BYTES} bytes")
+    else:
+        nonce = os.urandom(NONCE_BYTES)
     return Ciphertext(nonce=nonce, data=AESGCM(key).encrypt(nonce, plaintext, associated_data))
 
 

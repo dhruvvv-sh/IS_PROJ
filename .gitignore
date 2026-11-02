@@ -9,3 +9,7 @@ __pycache__/
 .lan-certs/
 .vscode/
 *.checkpoint.json
+node_modules/
+.presentation-build/node_modules/
+*.log
+*.tmp

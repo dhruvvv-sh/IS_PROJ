@@ -41,8 +41,8 @@ those identity keys or provide forward secrecy. The full signed envelopes and
 security events are visible to Alice and Bob. The deployment and role-by-role
 testing steps are in [CENTRAL_PC_SETUP.md](CENTRAL_PC_SETUP.md).
 When a role moves to a different browser, its owner explicitly rotates that
-role's identity and starts a new chat. The other participant approves the new
-public-key fingerprint after comparing it outside CipherChat. Old messages
+role's identity and starts a new chat. Both participants verify their peer on first contact; after a move, the other
+participant approves the new combined public-key fingerprint after comparing it outside CipherChat. Old messages
 remain encrypted for the old browser.
 See [ALGORITHMS_AND_DATA_FLOW.md](ALGORITHMS_AND_DATA_FLOW.md) for the
 implemented algorithms, process order, and input/output byte sizes.
@@ -81,3 +81,14 @@ Verification can instead lead to `BLOCKED`. There is no automatic retry loop.
 The current `rekey()` can derive a new session key when given a changed context,
 but it reuses the identity X25519 key pair; it does not provide a fresh ephemeral
 exchange or enforce context uniqueness.
+
+
+## Cryptographic Protocol Evaluation Interface
+
+The three-role realtime application provides an authenticated E2EE communication
+channel with client-side Web Crypto operations, Trust-On-First-Use (TOFU) key
+pinning, an active adversary console (Mallory), and cryptographic pipeline inspection.
+Use `app:app` for this interface; `cipherchat.ui.server` remains the separate
+local execution-trace UI. Run the database migration before starting the API.
+See [CENTRAL_PC_SETUP.md](CENTRAL_PC_SETUP.md#terminal-ui-and-repeatable-runs) for
+fresh runs, role permissions, browser setup, and optional integration tests.

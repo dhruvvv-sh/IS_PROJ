@@ -116,7 +116,7 @@ Verification recomputes each hash and checks each predecessor link. It detects r
 
 ### 27. Is the evidence chain currently in SQLite?
 
-No. `EvidenceLog` currently stores records in memory and can export JSON. There is no SQLite-backed multi-computer evidence store or automatically protected independent checkpoint in this checkout.
+No. The local `EvidenceLog` stores records in memory and exports JSON. The realtime three-role chat uses central MySQL for encrypted envelopes, replay counters, delivery receipts, and audit evidence. Independent checkpoints are an explicit operator responsibility.
 
 ### 28. Does a hash chain prove who authored a record?
 
@@ -128,13 +128,13 @@ The incident-evidence records are designed to exclude plaintext, private keys, s
 
 ### 30. What happens after a detected attack?
 
-The recovery state machine moves through `SUSPECTED_ATTACK`, `QUARANTINED`, and `VERIFYING`, then either `REKEYING` and `SECURE` or `BLOCKED`. The controlled simulator drives those transitions. A live, separate-computer chat that stops automatically on evidence deletion has not yet been built.
+The recovery state machine moves through `SUSPECTED_ATTACK`, `QUARANTINED`, and `VERIFYING`, then either `REKEYING` and `SECURE` or `BLOCKED`. Both the controlled simulator and realtime chat use these transitions. Realtime replay, tampering, impersonation, and stale-delivery demonstrations quarantine the chat. Key-substitution verification blocks it. Audit deletion in a disposable lab makes integrity checks fail and blocks sending. An operator can start a fresh context with retained evidence after verifying an intact audit; a damaged database needs restoration.
 
 ## E. Scope and performance
 
 ### 31. Is this a complete Signal-style protocol?
 
-No. The current project has pinned-key X25519/HKDF setup, AES-GCM encryption, Ed25519 signatures, replay checks, local attack simulations, and an in-memory evidence chain. It does not implement a Double Ratchet, automatic network key negotiation, durable replay state, or independent multi-computer evidence storage.
+No. It has X25519/HKDF setup, AES-GCM encryption, Ed25519 signatures, browser fingerprint approval, attack simulations, and MySQL-backed replay state and evidence for the realtime lab. It does not implement a Double Ratchet, fresh ephemeral key exchange, automatic key authenticity, or forward secrecy. Separate browser profiles are required to isolate role keys.
 
 ### 32. What has actually been benchmarked?
 
@@ -143,3 +143,18 @@ The saved local report compares CipherChat message-operation timings and wire si
 ### 33. What is the shortest accurate summary of the cryptographic flow?
 
 **X25519 keys establish a 32-byte shared secret → HKDF-SHA-256 derives a 32-byte AES key → AES-256-GCM encrypts each message using a fresh 12-byte nonce → Ed25519 signs the encrypted envelope → Bob verifies the signature, rejects replay, and authenticates/decrypts. SHA-256 links incident records.**
+
+
+### How does the terminal UI verify identities?
+
+It displays SHA-256 of a domain-separated string containing both the X25519 and
+Ed25519 public keys. Alice and Bob compare the 64-digit fingerprint through an
+independent channel before approving first contact or a changed identity. This
+binds the encryption and signing keys together; it is not automatic authentication.
+
+### Why can all three roles use the same database?
+
+The API owns the database credentials and enforces role permissions. Alice and Bob
+send signed ciphertext as themselves; Mallory reads lab captures and runs bounded
+attack scenarios. Shared storage does not give Mallory plaintext, participant
+private keys, direct SQL privileges, or permission to recover a quarantined chat.

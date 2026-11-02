@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from cryptography.exceptions import InvalidTag
@@ -38,11 +39,52 @@ def _secret() -> bytes:
     return value.encode()
 
 
+def _hash_password(password: str, salt: bytes | None = None) -> str:
+    """Hash password using PBKDF2-HMAC-SHA256 with 100,000 iterations."""
+    salt = salt or secrets.token_bytes(16)
+    derived = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 100000)
+    return f"pbkdf2_sha256$100000${salt.hex()}${derived.hex()}"
+
+
+def _verify_password(username: str, candidate: str) -> bool:
+    stored = os.getenv(f"CIPHERCHAT_{username.upper()}_PASSWORD")
+    if not stored:
+        raise RuntimeError(f"set CIPHERCHAT_{username.upper()}_PASSWORD")
+    if stored.startswith("pbkdf2_sha256$"):
+        try:
+            _, iters_str, salt_hex, hash_hex = stored.split("$", 3)
+            iters = int(iters_str)
+            salt = bytes.fromhex(salt_hex)
+            derived = hashlib.pbkdf2_hmac("sha256", candidate.encode("utf-8"), salt, iters)
+            return hmac.compare_digest(derived.hex(), hash_hex)
+        except Exception:
+            return False
+    return hmac.compare_digest(candidate, stored)
+
+
 def _password(username: str) -> str:
     value = os.getenv(f"CIPHERCHAT_{username.upper()}_PASSWORD")
     if not value:
         raise RuntimeError(f"set CIPHERCHAT_{username.upper()}_PASSWORD")
     return value
+
+
+_rate_limit_state: dict[str, list[float]] = {}
+RATE_LIMIT_WINDOW = 60
+
+
+def _rate_limit(key: str, max_attempts: int | None = None, window: int = RATE_LIMIT_WINDOW) -> None:
+    limit_env = os.getenv("CIPHERCHAT_RATE_LIMIT")
+    if limit_env == "0" or "testclient" in key:
+        return
+    limit = max_attempts or int(limit_env or "60")
+    now = time.time()
+    attempts = _rate_limit_state.setdefault(key, [])
+    valid = [t for t in attempts if t > now - window]
+    _rate_limit_state[key] = valid
+    if len(valid) >= limit:
+        raise HTTPException(429, "too many requests; please slow down")
+    valid.append(now)
 
 
 def _token(username: str) -> str:
@@ -90,14 +132,31 @@ app = FastAPI(title="CipherChat HTTP laboratory")
 STATIC.mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
+_allowed_origins = [o.strip() for o in os.getenv("CIPHERCHAT_ALLOWED_ORIGINS", "").split(",") if o.strip()]
+if _allowed_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_allowed_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
 
 @app.middleware("http")
 async def central_api_or_frontend_proxy(request: Request, call_next):
     """Keep the Vercel page same-origin while its API runs on Alice's MacBook."""
     path = request.url.path
+    if request.method in {"POST", "PUT", "PATCH"}:
+        body = bytearray()
+        async for chunk in request.stream():
+            body.extend(chunk)
+            if len(body) > 200_000:
+                return JSONResponse({"detail": "request exceeds 200,000 bytes"}, status_code=413)
+        request._body = bytes(body)
     upstream = os.getenv("CIPHERCHAT_API_UPSTREAM_URL", "").rstrip("/")
     central_only = os.getenv("CIPHERCHAT_CENTRAL_ONLY") == "1"
-    if central_only:
+    if central_only and path != "/health":
         if not path.startswith("/api/"):
             return JSONResponse({"detail": "not found"}, status_code=404)
         expected = os.getenv("CIPHERCHAT_PROXY_SECRET", "")
@@ -128,13 +187,28 @@ async def central_api_or_frontend_proxy(request: Request, call_next):
         outgoing = {name: value for name, value in result.headers.items()
                     if name.lower() in {"content-type", "set-cookie", "cache-control"}}
         return Response(content=result.content, status_code=result.status_code, headers=outgoing)
-    return await call_next(request)
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "same-origin"
+    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+    if path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+async def _json_object(request: Request) -> dict:
+    try:
+        value = await request.json()
+    except (ValueError, UnicodeDecodeError) as error:
+        raise HTTPException(400, "invalid JSON body") from error
+    if not isinstance(value, dict):
+        raise HTTPException(400, "request must be an object")
+    return value
 
 
 @lru_cache(maxsize=1)
 def _database() -> Database:
     database = Database(Config.from_env())
-    database.migrate()
     return database
 
 
@@ -149,6 +223,22 @@ def _check(db: Database):
         raise HTTPException(409, f"chat blocked: audit integrity failure: {error}") from error
 
 
+@app.get("/health")
+def health(request: Request):
+    """Health check endpoint for Docker and orchestrator probes."""
+    if os.getenv("CIPHERCHAT_CENTRAL_ONLY") == "1" and (not request.client or request.client.host not in {"127.0.0.1", "::1"}):
+        raise HTTPException(404, "not found")
+    db_ok = True
+    try:
+        _db(request).presence()
+    except Exception:
+        db_ok = False
+    return JSONResponse(
+        {"status": "ok" if db_ok else "degraded", "database": "connected" if db_ok else "unreachable"},
+        status_code=200 if db_ok else 503,
+    )
+
+
 @app.get("/")
 def index():
     return FileResponse(STATIC / "index.html")
@@ -157,19 +247,20 @@ def index():
 @app.post("/api/login")
 async def login(request: Request):
     _same_origin(request)
-    data = await request.json()
+    client_ip = request.client.host if request.client else "unknown"
+    _rate_limit(f"login:{client_ip}")
+    data = await _json_object(request)
     if not isinstance(data, dict):
         raise HTTPException(400, "request must be an object")
     username = data.get("username", "")
-    if not isinstance(username, str) or username not in USERS or not hmac.compare_digest(str(data.get("password", "")), _password(username)):
+    if not isinstance(username, str) or username not in USERS or not _verify_password(username, str(data.get("password", ""))):
         raise HTTPException(401, "invalid credentials")
     token = _token(username)
     if not _db(request).claim_session(username, _token_hash(token), replace_existing=data.get("replace_existing") is True):
         raise HTTPException(409, f"{username.capitalize()} is already online. Log out there, wait 30 seconds, or take over this role.")
-    from fastapi.responses import JSONResponse
     response = JSONResponse({"username": username})
     response.set_cookie("cipherchat_session", token, httponly=True, samesite="strict",
-                        secure=os.getenv("CIPHERCHAT_COOKIE_SECURE") == "1", max_age=8 * 3600)
+                        secure=os.getenv("CIPHERCHAT_COOKIE_SECURE", "1") == "1", max_age=8 * 3600)
     return response
 
 
@@ -180,9 +271,21 @@ def logout(request: Request):
     username = _user(token)
     if username:
         _db(request).release_session(username, _token_hash(token))
-    from fastapi.responses import JSONResponse
     response = JSONResponse({"ok": True})
     response.delete_cookie("cipherchat_session")
+    return response
+
+
+@app.post("/api/refresh")
+def refresh_session(request: Request):
+    _same_origin(request)
+    username = _http_user(request)
+    new_token = _token(username)
+    if not _db(request).claim_session(username, _token_hash(new_token), replace_existing=True):
+        raise HTTPException(409, "could not refresh session")
+    response = JSONResponse({"username": username, "refreshed": True})
+    response.set_cookie("cipherchat_session", new_token, httponly=True, samesite="strict",
+                        secure=os.getenv("CIPHERCHAT_COOKIE_SECURE", "1") == "1", max_age=8 * 3600)
     return response
 
 
@@ -208,7 +311,7 @@ async def register(request: Request):
         raise HTTPException(403, "Mallory cannot register a chat identity")
     db = _db(request)
     _check(db)
-    data = await request.json()
+    data = await _json_object(request)
     if not isinstance(data, dict):
         raise HTTPException(400, "request must be an object")
     try:
@@ -233,7 +336,7 @@ async def rotate_identity(request: Request):
         raise HTTPException(403, "Mallory has no chat identity")
     db = _db(request)
     _check(db)
-    data = await request.json()
+    data = await _json_object(request)
     if not isinstance(data, dict) or data.get("confirm_new_browser") is not True:
         raise HTTPException(400, "explicit new-browser confirmation required")
     try:
@@ -247,9 +350,20 @@ async def rotate_identity(request: Request):
 
 
 @app.get("/api/history")
-def history(request: Request):
+def history(request: Request, limit: int = 50, offset: int = 0):
     username = _http_user(request)
-    return {"messages": _db(request).captured() if username == "mallory" else _db(request).messages(username)}
+    if not 1 <= limit <= 100 or offset < 0:
+        raise HTTPException(400, "limit must be 1–100 and offset must be nonnegative")
+    return _db(request).history_page(username, limit, offset)
+
+
+@app.get("/api/messages/{message_id}")
+def message_status(message_id: str, request: Request):
+    username = _http_user(request)
+    row = _db(request).message(message_id)
+    if not row or (username != "mallory" and username not in {row["envelope"]["sender_id"], row["envelope"]["receiver_id"]}):
+        raise HTTPException(404, "message not found")
+    return row
 
 
 @app.get("/api/sequence")
@@ -266,12 +380,12 @@ def dashboard(request: Request):
     db = _db(request)
     audit_valid = True
     try:
-        _check(db)
         stats = db.stats()
-    except HTTPException:
+    except AuditFailure:
         audit_valid = False
         stats = {"audit": {"valid": False}}
     return {"chat": db.chat_state(), "presence": db.presence(), "audit_valid": audit_valid,
+            "destructive_demo": os.getenv("CIPHERCHAT_ENABLE_DESTRUCTIVE_DEMO") == "1" and os.getenv("CIPHERCHAT_DISPOSABLE_LAB") == "1",
             "stats": stats, "events": db.events()}
 
 
@@ -299,7 +413,7 @@ def _quarantine(db: Database, actor: str, message_id: str | None, event_type: st
 
 
 def _submit(db: Database, actor: str, envelope: dict, simulated: bool = False,
-            verification_time: datetime | None = None) -> dict:
+            verification_time: datetime | None = None, idempotent: bool = False) -> dict:
     try:
         _check(db)
         state = db.chat_state()
@@ -335,7 +449,7 @@ def _submit(db: Database, actor: str, envelope: dict, simulated: bool = False,
             if simulated or event_type in {"TAMPERING", "TIMESTAMP_REJECTED"}:
                 _quarantine(db, actor, envelope.get("message_id"), event_type, reason)
             return {"accepted": False, "reason": reason, "event_type": event_type}
-        accepted, reason = db.accept(envelope)
+        accepted, reason = db.accept(envelope, idempotent=True) if idempotent else db.accept(envelope)
         if not accepted:
             if "chat blocked or session changed" in reason:
                 return {"accepted": False, "reason": reason, "event_type": "SESSION_UNAVAILABLE"}
@@ -358,17 +472,27 @@ async def send(request: Request):
     username = _http_user(request)
     if username == "mallory":
         raise HTTPException(403, "Mallory cannot send chat messages")
-    data = await request.json()
+    data = await _json_object(request)
     if not isinstance(data, dict):
         raise HTTPException(400, "request must be an object")
-    return _submit(_db(request), username, data.get("envelope"))
+    db = _db(request)
+    envelope = data.get("envelope")
+    retry_key = request.headers.get("x-cipherchat-request-id")
+    idempotent = bool(retry_key and isinstance(envelope, dict) and retry_key == envelope.get("message_id")
+                      and username == envelope.get("sender_id"))
+    if idempotent:
+        _check(db)
+        existing = db.message(retry_key)
+        if existing and existing["envelope"] == envelope:
+            return {"accepted": True, "reason": "already accepted", "delivery_status": existing["delivery_status"]}
+    return _submit(db, username, envelope, idempotent=idempotent)
 
 
 @app.post("/api/delivered")
 async def delivered(request: Request):
     _same_origin(request)
     username = _http_user(request)
-    data = await request.json()
+    data = await _json_object(request)
     if not isinstance(data, dict) or not isinstance(data.get("message_id"), str):
         raise HTTPException(400, "message_id must be a string")
     db = _db(request)
@@ -414,6 +538,17 @@ def rekey(request: Request):
     return {"chat": db.chat_state(), "verified": True}
 
 
+@app.post("/api/operator/new-run")
+def operator_new_run(request: Request):
+    _same_origin(request)
+    _http_user(request)
+    db = _db(request)
+    _check(db)
+    state = db.chat_state()
+    detail = db.start_new_run(state["session_id"])
+    return {"chat": db.chat_state(), "detail": detail}
+
+
 @app.post("/api/mallory/attack")
 async def mallory_attack(request: Request):
     _same_origin(request)
@@ -421,13 +556,13 @@ async def mallory_attack(request: Request):
         raise HTTPException(403, "Mallory role required")
     db = _db(request)
     _check(db)
-    data = await request.json()
+    data = await _json_object(request)
     if not isinstance(data, dict):
         raise HTTPException(400, "request must be an object")
     attack = data.get("attack")
     if attack == "delete_record":
-        if os.getenv("CIPHERCHAT_ENABLE_DESTRUCTIVE_DEMO") != "1":
-            raise HTTPException(403, "record deletion is disabled; set CIPHERCHAT_ENABLE_DESTRUCTIVE_DEMO=1 for a controlled lab")
+        if os.getenv("CIPHERCHAT_ENABLE_DESTRUCTIVE_DEMO") != "1" or os.getenv("CIPHERCHAT_DISPOSABLE_LAB") != "1":
+            raise HTTPException(403, "record deletion is disabled; enable destructive demo and disposable lab flags only on a separate disposable database")
         number = data.get("record_number")
         if not isinstance(number, int) or isinstance(number, bool):
             raise HTTPException(400, "select an audit record number")

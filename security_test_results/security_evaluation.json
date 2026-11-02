@@ -5,17 +5,17 @@
     "PASS": 6
   },
   "environment": {
-    "cryptography": "46.0.5",
-    "platform": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
-    "python": "3.13.12"
+    "cryptography": "50.0.1",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.14.6"
   },
-  "generated_at": "2026-10-13T07:49:19.728632+05:30",
+  "generated_at": "2026-11-03T02:41:20.118975+05:30",
   "overall_status": "PASS",
   "report_format": "cipherchat-security-evaluation-v1",
   "results": [
     {
       "case_id": "CONF-01",
-      "duration_ms": 23.582,
+      "duration_ms": 95.391,
       "expected": "All authorized reads succeed; all wrong-key reads fail; no plaintext is serialized; all sampled nonces differ.",
       "interpretation": "AES-256-GCM protects sampled message content in transit. This does not assess endpoint compromise, memory disclosure, or traffic analysis.",
       "metrics": {
@@ -32,7 +32,7 @@
     },
     {
       "case_id": "AUTH-01",
-      "duration_ms": 0.578,
+      "duration_ms": 2.216,
       "expected": "Every forged message and the substituted public key are rejected.",
       "interpretation": "The session authenticates encrypted content and pinned peer-key continuity. Initial pin provisioning remains an external trust requirement.",
       "metrics": {
@@ -47,7 +47,7 @@
     },
     {
       "case_id": "INT-01",
-      "duration_ms": 0.74,
+      "duration_ms": 1.757,
       "expected": "All altered messages are rejected before plaintext is released.",
       "interpretation": "GCM authentication and receiver binding detected every tested in-transit modification.",
       "metrics": {
@@ -61,7 +61,7 @@
     },
     {
       "case_id": "NREP-01",
-      "duration_ms": 0.324,
+      "duration_ms": 0.85,
       "expected": "A message lacking a valid signature from the sender-only Ed25519 key is rejected.",
       "interpretation": "Ed25519 signatures bind the complete encrypted envelope to Alice's private signing key. This depends on protected private keys and trusted public-key provisioning.",
       "metrics": {
@@ -75,7 +75,7 @@
     },
     {
       "case_id": "EVID-01",
-      "duration_ms": 0.111,
+      "duration_ms": 0.448,
       "expected": "The original chain verifies and every altered chain fails verification.",
       "interpretation": "The SHA-256 chain detects tested changes only when the chain checkpoint is retained in independent trusted storage.",
       "metrics": {
@@ -90,7 +90,7 @@
     },
     {
       "case_id": "AC-01",
-      "duration_ms": 0.568,
+      "duration_ms": 1.859,
       "expected": "All unauthorized protocol-level attempts fail closed.",
       "interpretation": "Protocol-level possession and binding checks pass. The prototype has no users, roles, resource permissions, or persistent authorization policy.",
       "metrics": {

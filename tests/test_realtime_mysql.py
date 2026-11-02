@@ -155,6 +155,7 @@ def test_mysql_http_chat_and_every_mallory_command(monkeypatch):
         conn.close()
     monkeypatch.setenv("CIPHERCHAT_SESSION_SECRET", "m" * 40)
     monkeypatch.setenv("CIPHERCHAT_ENABLE_DESTRUCTIVE_DEMO", "1")
+    monkeypatch.setenv("CIPHERCHAT_DISPOSABLE_LAB", "1")
     for role in ("alice", "bob", "mallory"):
         monkeypatch.setenv(f"CIPHERCHAT_{role.upper()}_PASSWORD", f"{role}-password")
     server._database.cache_clear()
@@ -232,6 +233,59 @@ def test_mysql_http_chat_and_every_mallory_command(monkeypatch):
             assert client.get("/api/dashboard", cookies=cookies["alice"]).json()["audit_valid"] is False
     finally:
         server._database.cache_clear()
+        conn = db.connect()
+        try:
+            cur = conn.cursor()
+            for table in ("cc_role_sessions", "cc_security_events", "cc_messages", "cc_message_state", "cc_users", "cc_audit_records"):
+                cur.execute("DELETE FROM " + table)
+            cur.execute("UPDATE cc_audit_head SET record_count=0, record_hash=%s WHERE singleton=1", (GENESIS,))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+@pytest.mark.skipif(os.getenv("CIPHERCHAT_TEST_MYSQL") != "1", reason="requires disposable MySQL")
+def test_mysql_terminal_pagination_idempotent_send_and_fresh_run():
+    db = Database(Config.from_env())
+    db.migrate()
+    assert db.verify()["record_count"] == 0, "requires an empty disposable database"
+    alice, bob = Identity.create("alice"), Identity.create("bob")
+    try:
+        for who, identity in (("alice", alice), ("bob", bob)):
+            db.register_identity(who, public_key_bytes(identity.public_key), identity.signing_public_key_bytes)
+        first = envelope_for(alice, bob)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: db.accept(first, idempotent=True), range(2)))
+        assert all(accepted for accepted, _ in results)
+        assert db.verify()["record_count"] == 3
+        for sequence in range(2, 122):
+            assert db.accept(envelope_for(alice, bob, sequence=sequence))[0]
+        # Exercise upgrading a populated pre-terminal schema without losing evidence.
+        conn = db.connect()
+        try:
+            conn.cursor().execute("ALTER TABLE cc_messages DROP COLUMN audit_number")
+            conn.commit()
+        finally:
+            conn.close()
+        db.migrate()
+        assert db.verify()["record_count"] == 123
+        for role in ("alice", "bob", "mallory"):
+            pages = [db.history_page(role, 50, offset) for offset in (0, 50, 100)]
+            assert all(page["total"] == 121 for page in pages)
+            ids = [row["envelope"]["message_id"] for page in pages for row in page["messages"]]
+            assert len(set(ids)) == len(ids) == 121
+        record_count = db.verify()["record_count"]
+        db.event("CHAT_BLOCKED", "mallory", None, {"reason":"test fresh lab lifecycle"})
+        result = db.start_new_run("alice-bob:1")
+        assert result["session_id"] == "alice-bob:2"
+        assert db.chat_state()["state"] == "SECURE"
+        assert db.history_page("alice")["total"] == 121
+        assert db.verify()["record_count"] == record_count + 2
+        with pytest.raises(ValueError, match="session changed"):
+            db.start_new_run("alice-bob:1")
+        assert db.accept(first, idempotent=True)[0]
+        assert db.verify()["record_count"] == record_count + 2
+    finally:
         conn = db.connect()
         try:
             cur = conn.cursor()

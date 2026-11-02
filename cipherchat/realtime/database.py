@@ -54,11 +54,40 @@ def _payload(value):
 class Database:
     def __init__(self, config: Config):
         self.config = config
+        self._pool = None
+
+    def _get_pool(self):
+        if self._pool is None:
+            try:
+                import mysql.connector.pooling
+                self._pool = mysql.connector.pooling.MySQLConnectionPool(
+                    pool_name="cipherchat_pool",
+                    pool_size=5,
+                    host=self.config.host,
+                    port=self.config.port,
+                    database=self.config.database,
+                    user=self.config.user,
+                    password=self.config.password,
+                    autocommit=False,
+                    connection_timeout=5,
+                )
+            except Exception:
+                self._pool = False
+        return self._pool if self._pool is not False else None
 
     def connect(self):
-        conn = mysql.connector.connect(host=self.config.host, port=self.config.port, database=self.config.database,
-                                       user=self.config.user, password=self.config.password, autocommit=False,
-                                       connection_timeout=5)
+        pool = self._get_pool()
+        if pool is not None:
+            try:
+                conn = pool.get_connection()
+            except Exception:
+                conn = mysql.connector.connect(host=self.config.host, port=self.config.port, database=self.config.database,
+                                               user=self.config.user, password=self.config.password, autocommit=False,
+                                               connection_timeout=5)
+        else:
+            conn = mysql.connector.connect(host=self.config.host, port=self.config.port, database=self.config.database,
+                                           user=self.config.user, password=self.config.password, autocommit=False,
+                                           connection_timeout=5)
         cur = conn.cursor()
         cur.execute("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED")
         cur.close()
@@ -102,6 +131,16 @@ class Database:
                     last_seen DOUBLE NOT NULL) ENGINE=InnoDB""",
             ):
                 cur.execute(statement)
+            cur.execute("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = %s AND TABLE_NAME = 'cc_messages' AND COLUMN_NAME = 'audit_number'", (self.config.database,))
+            if not cur.fetchone()[0]:
+                # Audit order is immutable, unlike timestamps that may tie or move backwards.
+                cur.execute("ALTER TABLE cc_messages ADD COLUMN audit_number BIGINT UNSIGNED NULL")
+            cur.execute("SELECT IS_NULLABLE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = %s AND TABLE_NAME = 'cc_messages' AND COLUMN_NAME = 'audit_number'", (self.config.database,))
+            if cur.fetchone()[0] == "YES":
+                cur.execute("""UPDATE cc_messages m JOIN cc_audit_records a
+                    ON a.kind = 'ENCRYPTED_MESSAGE' AND JSON_UNQUOTE(JSON_EXTRACT(a.payload_json, '$.message_id')) = m.message_id
+                    SET m.audit_number = a.number""")
+                cur.execute("ALTER TABLE cc_messages MODIFY audit_number BIGINT UNSIGNED NOT NULL, ADD UNIQUE KEY ix_message_audit (audit_number)")
             cur.execute("INSERT IGNORE INTO cc_audit_head VALUES (1, 0, %s)", (GENESIS,))
             conn.commit()
         finally:
@@ -123,6 +162,7 @@ class Database:
         anchor = self._anchor()
         anchor_tip = GENESIS if anchor and anchor["record_count"] == 0 else None
         expected_messages = {}
+        expected_order = {}
         expected_users = {}
         expected_events = []
         for number, timestamp, kind, raw, prior, digest in cur.fetchall():
@@ -135,6 +175,7 @@ class Database:
                 anchor_tip = digest
             if kind == "ENCRYPTED_MESSAGE" and payload.get("protocol_version") == 3:
                 expected_messages[payload["message_id"]] = {"envelope": payload, "delivery_status": "QUEUED"}
+                expected_order[payload["message_id"]] = number
             elif kind == "DELIVERY_ACK":
                 message = expected_messages.get(payload.get("message_id"))
                 if not message or payload.get("status") != "DELIVERED":
@@ -162,6 +203,9 @@ class Database:
             actual_messages[message_id] = {"envelope": envelope, "delivery_status": status}
         if actual_messages != expected_messages:
             raise AuditFailure("message table differs from audited envelopes or delivery status")
+        cur.execute("SELECT message_id, audit_number FROM cc_messages")
+        if dict(cur.fetchall()) != expected_order:
+            raise AuditFailure("message order differs from audit trail")
         cur.execute("SELECT username, exchange_public, signing_public FROM cc_users")
         actual_users = {name: (bytes(exchange).hex(), bytes(signing).hex()) for name, exchange, signing in cur.fetchall()}
         if actual_users != expected_users:
@@ -198,19 +242,27 @@ class Database:
         path.chmod(0o600)
         return value
 
-    def _append_audit(self, cur, kind: str, payload: dict):
-        cur.execute("SELECT record_count FROM cc_audit_head WHERE singleton = 1 FOR UPDATE")
-        if cur.fetchone() is None:
+    def _append_audit(self, cur, kind: str, payload: dict) -> int:
+        cur.execute("SELECT record_count, record_hash FROM cc_audit_head WHERE singleton = 1 FOR UPDATE")
+        head = cur.fetchone()
+        if head is None:
             raise AuditFailure("audit head missing")
-        head = self._verify(cur)
-        number = head["record_count"] + 1
+        current_count = int(head[0])
+        previous_hash = head[1]
+        if current_count > 0:
+            cur.execute("SELECT record_hash FROM cc_audit_records WHERE number = %s", (current_count,))
+            tip = cur.fetchone()
+            if tip is None or tip[0] != previous_hash:
+                raise AuditFailure("audit head differs from records")
+        number = current_count + 1
         timestamp = _now()
-        digest = _digest(number, timestamp, kind, payload, head["record_hash"])
+        digest = _digest(number, timestamp, kind, payload, previous_hash)
         cur.execute("INSERT INTO cc_audit_records VALUES (%s, %s, %s, %s, %s, %s)",
-                    (number, timestamp, kind, canonical(payload).decode(), head["record_hash"], digest))
+                    (number, timestamp, kind, canonical(payload).decode(), previous_hash, digest))
         cur.execute("UPDATE cc_audit_head SET record_count = %s, record_hash = %s WHERE singleton = 1", (number, digest))
+        return number
 
-    def identity(self, username: str):
+    def identity(self, username: str) -> dict[str, str] | None:
         conn = self.connect()
         try:
             cur = conn.cursor()
@@ -257,7 +309,7 @@ class Database:
         finally:
             conn.close()
 
-    def release_session(self, username: str, token_hash: str):
+    def release_session(self, username: str, token_hash: str) -> None:
         conn = self.connect()
         try:
             cur = conn.cursor()
@@ -276,7 +328,7 @@ class Database:
         finally:
             conn.close()
 
-    def register_identity(self, username: str, exchange: bytes, signing: bytes):
+    def register_identity(self, username: str, exchange: bytes, signing: bytes) -> None:
         if username not in {"alice", "bob"} or len(exchange) != 32 or len(signing) != 32:
             raise ValueError("invalid identity registration")
         conn = self.connect()
@@ -297,7 +349,7 @@ class Database:
         finally:
             conn.close()
 
-    def rotate_identity(self, username: str, exchange: bytes, signing: bytes):
+    def rotate_identity(self, username: str, exchange: bytes, signing: bytes) -> dict[str, object]:
         """Move a role to a new browser and invalidate the previous chat session."""
         if username not in {"alice", "bob"} or len(exchange) != 32 or len(signing) != 32:
             raise ValueError("invalid identity rotation")
@@ -340,7 +392,7 @@ class Database:
         finally:
             conn.close()
 
-    def event(self, event_type: str, actor: str, message_id: str | None, detail: dict):
+    def event(self, event_type: str, actor: str, message_id: str | None, detail: dict) -> None:
         if not isinstance(message_id, str) or len(message_id) > 64:
             message_id = None
         conn = self.connect()
@@ -358,7 +410,7 @@ class Database:
         finally:
             conn.close()
 
-    def accept(self, envelope: dict):
+    def accept(self, envelope: dict, idempotent: bool = False) -> tuple[bool, str]:
         conn = self.connect()
         try:
             cur = conn.cursor()
@@ -367,7 +419,12 @@ class Database:
             cur.execute("SELECT record_count FROM cc_audit_head WHERE singleton = 1 FOR UPDATE")
             if cur.fetchone() is None:
                 raise AuditFailure("audit head missing")
-            self._verify(cur)
+            if idempotent:
+                cur.execute("SELECT envelope FROM cc_messages WHERE message_id = %s", (envelope["message_id"],))
+                existing = cur.fetchone()
+                if existing and _payload(existing[0]) == envelope:
+                    conn.rollback()
+                    return True, "already accepted"
             state = self._chat_state(cur)
             if state["blocked"] or envelope["session_id"] != state["session_id"]:
                 conn.rollback()
@@ -381,12 +438,12 @@ class Database:
                 conn.rollback()
                 return False, "duplicate message ID or stale sequence"
             timestamp = _now()
-            self._append_audit(cur, "ENCRYPTED_MESSAGE", envelope)
+            audit_number = self._append_audit(cur, "ENCRYPTED_MESSAGE", envelope)
             cur.execute("""INSERT INTO cc_messages
-                (message_id, conversation_id, sender_id, receiver_id, sequence_number, signed_timestamp, received_at, envelope, delivery_status)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'QUEUED')""",
+                (message_id, conversation_id, sender_id, receiver_id, sequence_number, signed_timestamp, received_at, envelope, audit_number, delivery_status)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'QUEUED')""",
                 (envelope["message_id"], conversation, sender, envelope["receiver_id"], number,
-                 envelope["timestamp"], timestamp, canonical(envelope).decode()))
+                 envelope["timestamp"], timestamp, canonical(envelope).decode(), audit_number))
             if state_row:
                 cur.execute("UPDATE cc_message_state SET highest_sequence = %s WHERE sender_id = %s AND conversation_id = %s",
                             (number, sender, conversation))
@@ -403,7 +460,7 @@ class Database:
         finally:
             conn.close()
 
-    def mark_delivered(self, message_id: str):
+    def mark_delivered(self, message_id: str) -> None:
         conn = self.connect()
         try:
             cur = conn.cursor()
@@ -421,7 +478,7 @@ class Database:
         finally:
             conn.close()
 
-    def message(self, message_id: str):
+    def message(self, message_id: str) -> dict[str, object] | None:
         conn = self.connect()
         try:
             cur = conn.cursor()
@@ -431,7 +488,7 @@ class Database:
         finally:
             conn.close()
 
-    def pending(self, username: str):
+    def pending(self, username: str) -> list[dict[str, object]]:
         conn = self.connect()
         try:
             cur = conn.cursor()
@@ -473,7 +530,7 @@ class Database:
                 "incident_type": incident_type}
 
     def recovery_transition(self, actor: str, message_id: str | None, expected: RecoveryState,
-                            transitions: tuple[RecoveryState, ...], detail: dict | None = None):
+                            transitions: tuple[RecoveryState, ...], detail: dict | None = None) -> bool:
         """Persist each permitted FSM step and its evidence under one admission lock."""
         conn = self.connect()
         try:
@@ -481,7 +538,6 @@ class Database:
             cur.execute("SELECT record_count FROM cc_audit_head WHERE singleton = 1 FOR UPDATE")
             if cur.fetchone() is None:
                 raise AuditFailure("audit head missing")
-            self._verify(cur)
             state = self._chat_state(cur)
             if state["state"] != expected.value:
                 conn.rollback()
@@ -507,14 +563,14 @@ class Database:
         finally:
             conn.close()
 
-    def chat_state(self):
+    def chat_state(self) -> dict[str, object]:
         conn = self.connect()
         try:
             return self._chat_state(conn.cursor())
         finally:
             conn.close()
 
-    def messages(self, username: str):
+    def messages(self, username: str) -> list[dict[str, object]]:
         conn = self.connect()
         try:
             cur = conn.cursor()
@@ -523,7 +579,50 @@ class Database:
         finally:
             conn.close()
 
-    def captured(self):
+    def history_page(self, username: str, limit: int = 50, offset: int = 0) -> dict:
+        """Bounded, stable oldest-first history shared by the three lab roles."""
+        if username not in {"alice", "bob", "mallory"} or not 1 <= limit <= 100 or offset < 0:
+            raise ValueError("invalid history request")
+        where = "" if username == "mallory" else " WHERE sender_id = %s OR receiver_id = %s"
+        params = () if username == "mallory" else (username, username)
+        conn = self.connect()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM cc_messages" + where, params)
+            total = int(cur.fetchone()[0])
+            cur.execute("SELECT envelope, delivery_status FROM cc_messages" + where +
+                        " ORDER BY audit_number LIMIT %s OFFSET %s", (*params, limit, offset))
+            return {"messages": [{"envelope": _payload(raw), "delivery_status": status} for raw, status in cur.fetchall()],
+                    "total": total, "offset": offset, "limit": limit}
+        finally:
+            conn.close()
+
+    def start_new_run(self, expected_session: str) -> dict:
+        """Operator-only fresh context; preserve all messages and incident evidence."""
+        conn = self.connect()
+        try:
+            cur = conn.cursor()
+            self._verify(cur)
+            state = self._chat_state(cur)
+            if state["session_id"] != expected_session:
+                raise ValueError("session changed; verify the current session before starting a run")
+            detail = {"generation": state["generation"] + 1, "previous_session": expected_session,
+                      "reason": "operator explicitly started a fresh laboratory run"}
+            timestamp = _now()
+            event = {"timestamp": timestamp, "event_type": "CHAT_REKEYED", "actor": "operator",
+                     "message_id": None, "detail": detail}
+            self._append_audit(cur, "SECURITY_EVENT", event)
+            cur.execute("INSERT INTO cc_security_events (timestamp, event_type, actor, message_id, detail_json) VALUES (%s, %s, %s, %s, %s)",
+                        (timestamp, "CHAT_REKEYED", "operator", None, canonical(detail).decode()))
+            conn.commit()
+            return {**detail, "session_id": f"alice-bob:{detail['generation']}"}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def captured(self) -> list[dict[str, object]]:
         conn = self.connect()
         try:
             cur = conn.cursor()
@@ -532,7 +631,7 @@ class Database:
         finally:
             conn.close()
 
-    def events(self):
+    def events(self) -> list[dict[str, object]]:
         conn = self.connect()
         try:
             cur = conn.cursor()
@@ -542,10 +641,11 @@ class Database:
         finally:
             conn.close()
 
-    def stats(self):
+    def stats(self) -> dict[str, object]:
         conn = self.connect()
         try:
             cur = conn.cursor()
+            audit = self._verify(cur)
             cur.execute("SELECT delivery_status, COUNT(*) FROM cc_messages GROUP BY delivery_status")
             statuses = dict(cur.fetchall())
             cur.execute("SELECT event_type, COUNT(*) FROM cc_security_events GROUP BY event_type")
@@ -555,11 +655,11 @@ class Database:
             signature_failures = int(cur.fetchone()[0])
             return {"messages_sent": sum(statuses.values()), "messages_delivered": statuses.get("DELIVERED", 0),
                     "signatures_verified": sum(statuses.values()), "signature_failures": signature_failures,
-                    "events": events, "audit": self._verify(cur)}
+                    "events": events, "audit": audit}
         finally:
             conn.close()
 
-    def audit_rows(self):
+    def audit_rows(self) -> list[dict[str, object]]:
         conn = self.connect()
         try:
             cur = conn.cursor()
@@ -570,7 +670,7 @@ class Database:
         finally:
             conn.close()
 
-    def delete_audit_row_for_demo(self, number: int):
+    def delete_audit_row_for_demo(self, number: int) -> None:
         if not isinstance(number, int) or isinstance(number, bool) or number < 1:
             raise ValueError("invalid audit record number")
         conn = self.connect()

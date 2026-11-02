@@ -10,6 +10,19 @@ from .attacks import AttackType
 
 GENESIS_HASH = "0" * 64
 
+MAX_DESCRIPTION_LENGTH = 1000
+
+
+def _sanitize_description(desc: str) -> str:
+    """Sanitize description: strip whitespace and truncate to max length."""
+    if not isinstance(desc, str):
+        return ""
+    cleaned = desc.strip()
+    if len(cleaned) > MAX_DESCRIPTION_LENGTH:
+        cleaned = cleaned[:MAX_DESCRIPTION_LENGTH] + "... [TRUNCATED]"
+    return cleaned
+
+
 @dataclass(frozen=True)
 class IncidentEvidence:
     incident_id: str
@@ -23,8 +36,10 @@ class IncidentEvidence:
     evidence_hash: str
 
     def material(self) -> dict[str, object]:
-        data = asdict(self); data.pop("evidence_hash")
+        data = asdict(self)
+        data.pop("evidence_hash")
         return data
+
 
 @dataclass(frozen=True)
 class EvidenceCheckpoint:
@@ -32,19 +47,23 @@ class EvidenceCheckpoint:
     record_count: int
     evidence_hash: str
 
+
 def _hash(record: IncidentEvidence) -> str:
     return hashlib.sha256(json.dumps(record.material(), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
+
 class EvidenceLog:
-    def __init__(self) -> None: self.records: list[IncidentEvidence] = []
+    def __init__(self) -> None:
+        self.records: list[IncidentEvidence] = []
 
     def record(self, *, session_id: str, attack_type: AttackType, description: str, message_id: str | None = None, sequence_number: int | None = None, timestamp: str | None = None) -> IncidentEvidence:
         if not isinstance(session_id, str) or not session_id or len(session_id) > MAX_ID_LENGTH:
             raise ValueError(f"session_id must be non-empty string <= {MAX_ID_LENGTH} characters")
         if message_id is not None and (not isinstance(message_id, str) or len(message_id) > MAX_ID_LENGTH):
             raise ValueError(f"message_id must be string <= {MAX_ID_LENGTH} characters")
+        sanitized_description = _sanitize_description(description)
         previous = self.records[-1].evidence_hash if self.records else GENESIS_HASH
-        draft = IncidentEvidence(str(uuid4()), timestamp or datetime.now(timezone.utc).isoformat(), session_id, attack_type.value, message_id, sequence_number, description, previous, "")
+        draft = IncidentEvidence(str(uuid4()), timestamp or datetime.now(timezone.utc).isoformat(), session_id, attack_type.value, message_id, sequence_number, sanitized_description, previous, "")
         item = replace(draft, evidence_hash=_hash(draft))
         self.records.append(item)
         return item
@@ -92,7 +111,8 @@ class EvidenceLog:
 def verify_evidence_chain(records: list[IncidentEvidence], checkpoint: EvidenceCheckpoint | None = None) -> bool:
     previous = GENESIS_HASH
     for record in records:
-        if record.previous_evidence_hash != previous or record.evidence_hash != _hash(record): return False
+        if record.previous_evidence_hash != previous or record.evidence_hash != _hash(record):
+            return False
         previous = record.evidence_hash
     if checkpoint is not None and (len(records) != checkpoint.record_count or previous != checkpoint.evidence_hash):
         return False

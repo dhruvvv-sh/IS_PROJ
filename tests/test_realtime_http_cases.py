@@ -259,6 +259,7 @@ def test_destructive_demo_is_gated_and_audit_failure_blocks_chat(lab, monkeypatc
     request = {"attack": "delete_record", "record_number": target}
     assert post(client, cookies, "mallory", "/api/mallory/attack", request).status_code == 403
     monkeypatch.setenv("CIPHERCHAT_ENABLE_DESTRUCTIVE_DEMO", "1")
+    monkeypatch.setenv("CIPHERCHAT_DISPOSABLE_LAB", "1")
     response = post(client, cookies, "mallory", "/api/mallory/attack", request)
     assert response.status_code == 200
     assert response.json()["chat_blocked"] is True

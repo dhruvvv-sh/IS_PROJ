@@ -72,7 +72,9 @@ def handle_attack(label: str, alice_sessions: SessionManager, bob_sessions: Sess
             print(f"Classification: {attack.value}")
             print(f"Evidence hash: {record.evidence_hash}")
             print(f"Previous evidence hash: {record.previous_evidence_hash}")
-            recovery.report_violation(); recovery.begin_verification(); recovery.verification_succeeded()
+            recovery.report_violation()
+            recovery.begin_verification()
+            recovery.verification_succeeded()
             rekey_session_id, rekey_context = str(uuid4()), b"rekey-replay-" + uuid4().bytes
             alice_sessions.rekey(public_key_bytes(bob_sessions.identity.public_key), bob_sessions.identity.signing_public_key_bytes, session_id=rekey_session_id, context=rekey_context)
             bob_sessions.rekey(public_key_bytes(alice_sessions.identity.public_key), alice_sessions.identity.signing_public_key_bytes, session_id=rekey_session_id, context=rekey_context)
@@ -111,7 +113,9 @@ def handle_attack(label: str, alice_sessions: SessionManager, bob_sessions: Sess
             print(f"Classification: {attack.value}")
             print(f"Evidence hash: {record.evidence_hash}")
             print(f"Previous evidence hash: {record.previous_evidence_hash}")
-            recovery.report_violation(); recovery.begin_verification(); recovery.verification_succeeded()
+            recovery.report_violation()
+            recovery.begin_verification()
+            recovery.verification_succeeded()
             rekey_session_id, rekey_context = str(uuid4()), b"rekey-tamper-" + uuid4().bytes
             alice_sessions.rekey(public_key_bytes(bob_sessions.identity.public_key), bob_sessions.identity.signing_public_key_bytes, session_id=rekey_session_id, context=rekey_context)
             bob_sessions.rekey(public_key_bytes(alice_sessions.identity.public_key), alice_sessions.identity.signing_public_key_bytes, session_id=rekey_session_id, context=rekey_context)
@@ -189,7 +193,6 @@ def main() -> None:
             tamper_field=tamper_field,
         )
 
-        checkpoint = EvidenceLog().checkpoint() if False else None
         again = input("\nRun another scenario? (y/n): ").strip().lower()
         if again not in {"y", "yes"}:
             print("Goodbye.")

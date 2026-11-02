@@ -1,5 +1,53 @@
 # CipherChat Verification Report
 
+## Terminal lab verification - 2026-11-03
+
+Implemented the pastel terminal interface, first-contact combined-key fingerprint
+approval, serialized polling and guarded actions, exact-envelope send retries,
+separate delivery receipt retries, session-aware readable history, bounded shared
+history pages, and explicit operator fresh runs. The API retains role-specific
+permissions over a single shared database. Destructive demonstrations require two
+explicit flags and a separate disposable database.
+
+Validation on Windows with Python 3.14.6, real Chromium Web Crypto, and a dedicated
+MySQL 8.0 container:
+
+- Full suite with browser and MySQL tests enabled: **124 passed, zero skipped**.
+- 265 warnings from deprecated Starlette/httpx test interfaces; no failing checks.
+- JavaScript syntax validation and Git whitespace checks passed.
+- Follow-up tests passed after final visual adjustments: keyboard CRT toggle,
+  reduced motion, 200% zoom, 320/390/768/1280/1440px reflow, and upgrading a populated
+  old MySQL schema while retaining its evidence chain.
+- Three isolated browser contexts exercised Unicode messaging, receipt retry,
+  response loss after commit, replay/tamper/impersonation/stale/eavesdrop/key
+  substitution, recovery, retained history after reload, role takeover, key
+  movement, and connection recovery without losing the draft.
+- Live MySQL exercised persistent replay prevention, concurrent identical-send
+  retries, paging beyond 100 messages, recovery, and fresh runs retaining evidence.
+- The preview runtime account successfully read the audit and claimed/released a
+  role lease; attempting DDL was denied. Production grants remain an operator setup
+  responsibility as documented in CENTRAL_PC_SETUP.md.
+- Primary text contrast is approximately 7.3-7.6:1 on the three pastel surfaces,
+  and at least 4.58:1 after the specified 20% scanline compositing. Coral is used
+  for accents rather than small-text surfaces.
+
+Screenshots are in `output/terminal-ui/`. A localhost preview runs on port 8765
+against the isolated test database, with destructive mode off. Demo credentials
+are `alice` / `alice-password`, `bob` / `bob-password`, and
+`mallory` / `mallory-password`. These are local preview credentials only.
+
+Scope: browser tests use an isolated in-memory HTTP backend, and the persistence
+suite separately uses real MySQL. The final preview smoke check uses the actual
+MySQL backend. A remote multi-device deployment, other browser engines, a complete
+screen-reader audit, and production-scale performance have not been verified.
+The app remains a single three-role educational lab with no forward secrecy.
+Run the migration before updating an existing deployment.
+
+## Earlier verification record
+
+The following report describes an earlier local-protocol verification run; its
+platform and test counts are historical.
+
 ## 1. Executive Summary
 
 **Overall status: PASS WITH WARNINGS.** All four requested fixes are implemented

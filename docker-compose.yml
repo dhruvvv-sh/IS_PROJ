@@ -30,6 +30,12 @@ services:
         condition: service_healthy
     ports:
       - "${CIPHERCHAT_BIND_PORT:-8765}:${CIPHERCHAT_BIND_PORT:-8765}"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:' + str('${CIPHERCHAT_BIND_PORT:-8765}') + '/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
 volumes:
   cipherchat_mysql:

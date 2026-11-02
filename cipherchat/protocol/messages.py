@@ -1,5 +1,6 @@
 """Authenticated JSON protocol messages and strict replay protection."""
 import base64
+from collections import OrderedDict
 import json
 from dataclasses import dataclass
 from uuid import uuid4
@@ -144,16 +145,20 @@ class SenderSession:
                                 payload.nonce, payload.data, self.signing_key.sign(unsigned.signing_bytes()))
 
 
+MAX_REPLAY_CACHE = 10000
+
+
 class ReceiverSession:
-    """Strict in-order receiver. Production transports often need a sliding window."""
-    def __init__(self, key: bytes, session_id: str, expected_sender_id: str, signing_public_key: Ed25519PublicKey):
+    """Strict in-order receiver with bounded replay cache."""
+    def __init__(self, key: bytes, session_id: str, expected_sender_id: str, signing_public_key: Ed25519PublicKey, max_replay_cache: int = MAX_REPLAY_CACHE):
         if not isinstance(session_id, str) or not session_id or len(session_id) > MAX_ID_LENGTH:
             raise ValidationError(f"session_id must be non-empty string <= {MAX_ID_LENGTH} characters")
         if not isinstance(expected_sender_id, str) or not expected_sender_id or len(expected_sender_id) > MAX_ID_LENGTH:
             raise ValidationError(f"expected_sender_id must be non-empty string <= {MAX_ID_LENGTH} characters")
         self.key, self.session_id, self.expected_sender_id, self.highest_sequence = key, session_id, expected_sender_id, 0
         self.signing_public_key = signing_public_key
-        self._seen_message_ids: set[str] = set()
+        self.max_replay_cache = max_replay_cache
+        self._seen_message_ids: OrderedDict[str, None] = OrderedDict()
         self._active = True
 
     def invalidate(self) -> None:
@@ -176,5 +181,7 @@ class ReceiverSession:
             raise ReplayError("message identifier was already accepted")
         plaintext = decrypt(self.key, Ciphertext(message.nonce, message.ciphertext), message.aad())
         self.highest_sequence = message.sequence_number
-        self._seen_message_ids.add(message.message_id)
+        if len(self._seen_message_ids) >= self.max_replay_cache:
+            self._seen_message_ids.popitem(last=False)
+        self._seen_message_ids[message.message_id] = None
         return plaintext.decode("utf-8")

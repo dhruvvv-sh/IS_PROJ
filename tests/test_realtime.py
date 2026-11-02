@@ -154,7 +154,9 @@ class MemoryDatabase:
             self.event("RECOVERY_STATE", actor, message_id, payload)
         return True
 
-    def accept(self, item):
+    def accept(self, item, idempotent=False):
+        if idempotent and self.saved.get(item["message_id"], {}).get("envelope") == item:
+            return True, "already accepted"
         key = (item["sender_id"], item["conversation_id"])
         if item["message_id"] in self.saved or item["sequence_number"] <= self.highest.get(key, 0):
             return False, "duplicate message ID or stale sequence"
@@ -178,6 +180,10 @@ class MemoryDatabase:
 
     def messages(self, username):
         return list(self.saved.values())
+
+    def history_page(self, username, limit=50, offset=0):
+        rows = self.messages(username)
+        return {"messages": rows[offset:offset+limit], "total": len(rows), "offset": offset, "limit": limit}
 
     def captured(self):
         return list(self.saved.values())
@@ -209,6 +215,7 @@ def test_authenticated_http_replay_tamper_impersonation_and_rekey(monkeypatch):
     monkeypatch.setenv("CIPHERCHAT_SESSION_SECRET", "0" * 40)
     monkeypatch.setenv("CIPHERCHAT_MYSQL_PASSWORD", "test")
     monkeypatch.setenv("CIPHERCHAT_ENABLE_DESTRUCTIVE_DEMO", "1")
+    monkeypatch.setenv("CIPHERCHAT_DISPOSABLE_LAB", "1")
     alice, bob = Identity.create("alice"), Identity.create("bob")
     with TestClient(server.app) as client:
         cookies = {}

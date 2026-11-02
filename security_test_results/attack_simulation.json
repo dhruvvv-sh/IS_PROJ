@@ -5,25 +5,25 @@
     {
       "category": "SESSION",
       "data": {
-        "session_id": "edf22308-fcf8-4631-9ea7-73b73f006f5e"
+        "session_id": "f4531c8a-672d-4c9a-bc92-22a6074815a3"
       },
       "explanation": "A fresh local demonstration session is ready.",
       "step": "01",
-      "timestamp": "2026-11-02T09:51:26.541+00:00",
+      "timestamp": "2026-11-02T21:11:44.384+00:00",
       "title": "SESSION CREATED"
     },
     {
       "category": "KEY_EXCHANGE",
       "data": {
-        "alice_public_key": "37f89a97e3bd7d66d086e4bf87c4879489a96866ced04aa39945a8b0e6f5e11c",
-        "alice_signing_public_key": "5219f1c510e0148d412c6f10efa532ec61af3ad8883084c1500873dd34d06b6a",
-        "bob_public_key": "32448dd331433c2a0d4324f0cfa7a0504738774874831a084cc7fb4397743e39",
-        "bob_signing_public_key": "9241b74c2ee4652498893dcc7a4d6712c31b4d72c2db8ff572dd514b74f2792d",
+        "alice_public_key": "d10fdb9e1870da7943d452ecacce77182c2b96dd2d2641aa23cb7238f575ae29",
+        "alice_signing_public_key": "a0dc113e3333063ef657788415712c78a3942848dc241074522a0b6546b0b918",
+        "bob_public_key": "ed0f47b153ba71670f2a098a26cb294d331eaa556d41479fce85ff2718a94811",
+        "bob_signing_public_key": "a7d28469bc5acc1f083ec69b6e22ed70d5ed188dea6058e2fee032534005b4b0",
         "private_keys": "NOT DISPLAYED"
       },
       "explanation": "Pinned X25519 and Ed25519 public keys are exchanged; private identity keys remain hidden.",
       "step": "02",
-      "timestamp": "2026-11-02T09:51:26.541+00:00",
+      "timestamp": "2026-11-02T21:11:44.384+00:00",
       "title": "X25519 COMPLETE"
     },
     {
@@ -31,12 +31,12 @@
       "data": {
         "algorithm": "HKDF-SHA-256",
         "domain": "cipherchat-v1",
-        "label": "LOCAL DEMONSTRATION VALUE",
-        "session_key": "4fff50b9b22c3deefd902e99e1e22d2690af4b413621765d154e01ff1f646455"
+        "label": "LOCAL DEMONSTRATION FINGERPRINT",
+        "session_key": "sha256:5839237230839a62... [REDACTED]"
       },
-      "explanation": "The ECDH output is processed by HKDF before use as an AES key.",
+      "explanation": "The ECDH output is processed by HKDF before use as an AES key; raw key is redacted from output.",
       "step": "03",
-      "timestamp": "2026-11-02T09:51:26.541+00:00",
+      "timestamp": "2026-11-02T21:11:44.384+00:00",
       "title": "HKDF SESSION KEY DERIVED"
     }
   ],
@@ -46,46 +46,46 @@
       "evidence_hash": "0000000000000000000000000000000000000000000000000000000000000000",
       "record_count": 0
     },
-    "exported_at": "2026-11-02T09:51:26.541295+00:00",
+    "exported_at": "2026-11-02T21:11:44.385207+00:00",
     "format": "cipherchat-evidence-log-v1",
     "record_count": 0,
     "records": [],
     "tip_evidence_hash": "0000000000000000000000000000000000000000000000000000000000000000"
   },
-  "exported_at": "2026-11-02T09:51:26.541+00:00",
+  "exported_at": "2026-11-02T21:11:44.385+00:00",
   "format": "cipherchat-demonstration-logs-v1",
   "http_audit_logs": [
     {
       "client_ip": "127.0.0.1",
-      "duration_ms": 0.011,
+      "duration_ms": 0.032,
       "error": "request body too large",
       "method": "POST",
       "path": "/api/send",
       "status_code": 413,
-      "timestamp": "2026-11-02T09:51:26.540+00:00"
+      "timestamp": "2026-11-02T21:11:44.375+00:00"
     },
     {
       "client_ip": "127.0.0.1",
-      "duration_ms": 0.007,
+      "duration_ms": 0.041,
       "error": "missing Content-Length",
       "method": "POST",
       "path": "/api/send",
       "status_code": 411,
-      "timestamp": "2026-11-02T09:51:26.541+00:00"
+      "timestamp": "2026-11-02T21:11:44.385+00:00"
     }
   ],
   "session": {
-    "alice_public_key": "37f89a97e3bd7d66d086e4bf87c4879489a96866ced04aa39945a8b0e6f5e11c",
-    "alice_signing_public_key": "5219f1c510e0148d412c6f10efa532ec61af3ad8883084c1500873dd34d06b6a",
-    "bob_public_key": "32448dd331433c2a0d4324f0cfa7a0504738774874831a084cc7fb4397743e39",
-    "bob_signing_public_key": "9241b74c2ee4652498893dcc7a4d6712c31b4d72c2db8ff572dd514b74f2792d",
+    "alice_public_key": "d10fdb9e1870da7943d452ecacce77182c2b96dd2d2641aa23cb7238f575ae29",
+    "alice_signing_public_key": "a0dc113e3333063ef657788415712c78a3942848dc241074522a0b6546b0b918",
+    "bob_public_key": "ed0f47b153ba71670f2a098a26cb294d331eaa556d41479fce85ff2718a94811",
+    "bob_signing_public_key": "a7d28469bc5acc1f083ec69b6e22ed70d5ed188dea6058e2fee032534005b4b0",
     "encryption": "AES-256-GCM",
     "kdf": "HKDF-SHA-256",
     "key_exchange": "X25519",
-    "session_id": "edf22308-fcf8-4631-9ea7-73b73f006f5e",
-    "session_key": "4fff50b9b22c3deefd902e99e1e22d2690af4b413621765d154e01ff1f646455"
+    "session_id": "f4531c8a-672d-4c9a-bc92-22a6074815a3",
+    "session_key": "sha256:5839237230839a62... [REDACTED]"
   },
-  "session_id": "edf22308-fcf8-4631-9ea7-73b73f006f5e",
+  "session_id": "f4531c8a-672d-4c9a-bc92-22a6074815a3",
   "system_limits": {
     "max_ciphertext_size": 65552,
     "max_context_length": 1024,
