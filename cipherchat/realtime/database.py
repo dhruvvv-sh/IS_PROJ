@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -94,6 +95,10 @@ class Database:
                     event_type VARCHAR(40) NOT NULL, actor VARCHAR(32) NOT NULL,
                     message_id VARCHAR(64) NULL, detail_json JSON NOT NULL,
                     KEY ix_events_time (id)) ENGINE=InnoDB""",
+                """CREATE TABLE IF NOT EXISTS cc_role_sessions (
+                    username VARCHAR(32) PRIMARY KEY,
+                    token_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+                    last_seen DOUBLE NOT NULL) ENGINE=InnoDB""",
             ):
                 cur.execute(statement)
             cur.execute("INSERT IGNORE INTO cc_audit_head VALUES (1, 0, %s)", (GENESIS,))
@@ -206,6 +211,61 @@ class Database:
             cur.execute("SELECT exchange_public, signing_public FROM cc_users WHERE username = %s", (username,))
             row = cur.fetchone()
             return {"exchange_public": bytes(row[0]).hex(), "signing_public": bytes(row[1]).hex()} if row else None
+        finally:
+            conn.close()
+
+    def claim_session(self, username: str, token_hash: str, lease_seconds: int = 30) -> bool:
+        """Atomically reserve one live browser session for a role."""
+        conn = self.connect()
+        try:
+            cur = conn.cursor()
+            cur.execute("INSERT IGNORE INTO cc_role_sessions VALUES (%s, '', 0)", (username,))
+            cur.execute("SELECT token_hash, last_seen FROM cc_role_sessions WHERE username = %s FOR UPDATE", (username,))
+            row = cur.fetchone()
+            now = time.time()
+            if row and float(row[1]) > now - lease_seconds:
+                conn.rollback()
+                return False
+            cur.execute("UPDATE cc_role_sessions SET token_hash = %s, last_seen = %s WHERE username = %s",
+                        (token_hash, now, username))
+            conn.commit()
+            return True
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def touch_session(self, username: str, token_hash: str, lease_seconds: int = 30) -> bool:
+        conn = self.connect()
+        try:
+            cur = conn.cursor()
+            now = time.time()
+            cur.execute("""UPDATE cc_role_sessions SET last_seen = %s
+                WHERE username = %s AND token_hash = %s AND last_seen > %s""",
+                (now, username, token_hash, now - lease_seconds))
+            active = cur.rowcount == 1
+            conn.commit()
+            return active
+        finally:
+            conn.close()
+
+    def release_session(self, username: str, token_hash: str):
+        conn = self.connect()
+        try:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM cc_role_sessions WHERE username = %s AND token_hash = %s", (username, token_hash))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def presence(self, lease_seconds: int = 30) -> dict[str, bool]:
+        conn = self.connect()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT username FROM cc_role_sessions WHERE last_seen > %s", (time.time() - lease_seconds,))
+            active = {row[0] for row in cur.fetchall()}
+            return {username: username in active for username in ("alice", "bob", "mallory")}
         finally:
             conn.close()
 

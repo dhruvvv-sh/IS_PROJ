@@ -4,6 +4,10 @@ The app exports `app` from the root `app.py`, which Vercel detects as a FastAPI
 entry point. Its transport is HTTP only. The browser requests new messages and
 security events every three seconds. A shared, persistent MySQL database is
 required because Vercel function instances do not share memory or local files.
+The database also holds one active login per role. Presence expires after 30
+seconds without requests, so a role can log in elsewhere after a closed browser
+times out. Logging out frees the role immediately. A browser tab lock prevents
+duplicate tabs in the same browser profile where Web Locks is supported.
 
 ## Prepare the database
 

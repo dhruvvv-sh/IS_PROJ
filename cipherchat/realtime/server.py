@@ -64,10 +64,15 @@ def _user(token: str | None) -> str | None:
 
 
 def _http_user(request: Request) -> str:
-    username = _user(request.cookies.get("cipherchat_session"))
-    if not username:
-        raise HTTPException(401, "log in first")
+    token = request.cookies.get("cipherchat_session")
+    username = _user(token)
+    if not username or not _db(request).touch_session(username, _token_hash(token)):
+        raise HTTPException(401, "session expired or replaced; log in again")
     return username
+
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
 
 
 def _same_origin(request: Request) -> None:
@@ -112,9 +117,12 @@ async def login(request: Request):
     username = data.get("username", "")
     if username not in USERS or not hmac.compare_digest(str(data.get("password", "")), _password(username)):
         raise HTTPException(401, "invalid credentials")
+    token = _token(username)
+    if not _db(request).claim_session(username, _token_hash(token)):
+        raise HTTPException(409, f"{username.capitalize()} is already online. Log out there or wait 30 seconds after closing that browser.")
     from fastapi.responses import JSONResponse
     response = JSONResponse({"username": username})
-    response.set_cookie("cipherchat_session", _token(username), httponly=True, samesite="strict",
+    response.set_cookie("cipherchat_session", token, httponly=True, samesite="strict",
                         secure=os.getenv("CIPHERCHAT_COOKIE_SECURE") == "1", max_age=8 * 3600)
     return response
 
@@ -122,6 +130,10 @@ async def login(request: Request):
 @app.post("/api/logout")
 def logout(request: Request):
     _same_origin(request)
+    token = request.cookies.get("cipherchat_session")
+    username = _user(token)
+    if username:
+        _db(request).release_session(username, _token_hash(token))
     from fastapi.responses import JSONResponse
     response = JSONResponse({"ok": True})
     response.delete_cookie("cipherchat_session")
@@ -131,7 +143,7 @@ def logout(request: Request):
 @app.get("/api/me")
 def me(request: Request):
     username = _http_user(request)
-    return {"username": username, "chat": _db(request).chat_state()}
+    return {"username": username, "chat": _db(request).chat_state(), "presence": _db(request).presence()}
 
 
 @app.get("/api/identity/{username}")
@@ -187,7 +199,7 @@ def dashboard(request: Request):
     except HTTPException:
         audit_valid = False
         stats = {"audit": {"valid": False}}
-    return {"chat": db.chat_state(), "audit_valid": audit_valid,
+    return {"chat": db.chat_state(), "presence": db.presence(), "audit_valid": audit_valid,
             "stats": stats, "events": db.events()}
 
 

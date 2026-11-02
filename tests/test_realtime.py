@@ -1,5 +1,6 @@
 import base64
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -56,9 +57,32 @@ class MemoryDatabase:
         self.security_events = []
         self.audit = []
         self.failed = False
+        self.sessions = {}
 
     def migrate(self):
         pass
+
+    def claim_session(self, username, token_hash, lease_seconds=30):
+        row = self.sessions.get(username)
+        if row and row[1] > time.time() - lease_seconds:
+            return False
+        self.sessions[username] = (token_hash, time.time())
+        return True
+
+    def touch_session(self, username, token_hash, lease_seconds=30):
+        row = self.sessions.get(username)
+        if not row or row[0] != token_hash or row[1] <= time.time() - lease_seconds:
+            return False
+        self.sessions[username] = (token_hash, time.time())
+        return True
+
+    def release_session(self, username, token_hash):
+        if self.sessions.get(username, (None,))[0] == token_hash:
+            del self.sessions[username]
+
+    def presence(self, lease_seconds=30):
+        return {username: username in self.sessions and self.sessions[username][1] > time.time() - lease_seconds
+                for username in ("alice", "bob", "mallory")}
 
     def verify(self):
         if self.failed:
@@ -138,6 +162,7 @@ class MemoryDatabase:
 def test_authenticated_http_replay_tamper_impersonation_and_rekey(monkeypatch):
     database = MemoryDatabase()
     monkeypatch.setattr(server, "Database", lambda config: database)
+    server._database.cache_clear()
     for name in ("ALICE", "BOB", "MALLORY"):
         monkeypatch.setenv(f"CIPHERCHAT_{name}_PASSWORD", name.lower() + "-password")
     monkeypatch.setenv("CIPHERCHAT_SESSION_SECRET", "0" * 40)
@@ -151,6 +176,8 @@ def test_authenticated_http_replay_tamper_impersonation_and_rekey(monkeypatch):
             assert response.status_code == 200
             cookies[name] = {"cipherchat_session": response.cookies["cipherchat_session"]}
         client.cookies.clear()
+        assert client.post("/api/login", json={"username": "bob", "password": "bob-password"}).status_code == 409
+        assert client.get("/api/me", cookies=cookies["alice"]).json()["presence"] == {"alice": True, "bob": True, "mallory": True}
         assert client.post("/api/login", json={"username": "alice", "password": "wrong"}).status_code == 401
         assert client.get("/api/me").status_code == 401
         for name, identity in (("alice", alice), ("bob", bob)):
@@ -181,3 +208,11 @@ def test_authenticated_http_replay_tamper_impersonation_and_rekey(monkeypatch):
         new = envelope_for(alice, bob, sequence=2, session_id=database.chat_state()["session_id"])
         assert client.post("/api/send", cookies=cookies["alice"], json={"envelope": new}).json()["accepted"] is True
         assert client.get("/api/history", cookies=cookies["bob"]).json()["messages"][-1]["envelope"] == new
+        assert client.post("/api/logout", cookies=cookies["bob"]).status_code == 200
+        assert client.get("/api/me", cookies=cookies["alice"]).json()["presence"]["bob"] is False
+        new_bob = client.post("/api/login", json={"username": "bob", "password": "bob-password"})
+        assert new_bob.status_code == 200
+        assert client.get("/api/me", cookies=cookies["bob"]).status_code == 401
+        database.sessions["bob"] = (database.sessions["bob"][0], time.time() - 31)
+        assert client.get("/api/me", cookies={"cipherchat_session": new_bob.cookies["cipherchat_session"]}).status_code == 401
+        assert client.post("/api/login", json={"username": "bob", "password": "bob-password"}).status_code == 200

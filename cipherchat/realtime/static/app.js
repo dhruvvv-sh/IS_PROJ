@@ -1,7 +1,19 @@
 const $ = id => document.getElementById(id);
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
-let me = null, keys = null, peer = null, captured = [], chat = null, seenMessages = new Set(), envelopes = new Map(), refreshTimer = null;
+let me = null, keys = null, peer = null, captured = [], chat = null, seenMessages = new Set(), envelopes = new Map(), refreshTimer = null, releaseRoleLock = null;
+
+async function reserveTab(username) {
+  if (!navigator.locks) return;
+  let signal;
+  const acquired = new Promise(resolve => { signal = resolve; });
+  navigator.locks.request(`cipherchat-role-${username}`, {ifAvailable:true}, async lock => {
+    signal(Boolean(lock));
+    if (lock) await new Promise(resolve => { releaseRoleLock = resolve; });
+  }).catch(() => signal(false));
+  if (!await acquired) throw new Error(`${username[0].toUpperCase()}${username.slice(1)} is already open in another tab.`);
+}
+function freeTab() { if (releaseRoleLock) { releaseRoleLock(); releaseRoleLock = null; } }
 
 function canonical(value) {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
@@ -30,8 +42,10 @@ function signingBytes(envelope) {
 }
 async function api(path, options = {}) {
   const response = await fetch(path, {...options, credentials:'same-origin'});
-  const value = await response.json();
-  if (!response.ok) throw new Error(value.detail || value.error || 'Request failed');
+  const body = await response.text();
+  let value;
+  try { value = JSON.parse(body); } catch { throw new Error(response.ok ? 'Invalid server response' : `Server error (${response.status}). Check database settings or deployment logs.`); }
+  if (!response.ok) throw new Error(value.detail || value.error || `Request failed (${response.status})`);
   return value;
 }
 function showError(message) { $('login-error').textContent = message; }
@@ -90,7 +104,6 @@ async function refreshPeer() {
     if (!pin) localStorage.setItem(pinKey, material);
   }
   peer = found;
-  status('peer-status', peer ? `${other} key registered` : `Waiting for ${other}'s public key`, peer ? 'good' : '');
 }
 async function sessionKey() {
   if (!peer) await refreshPeer();
@@ -117,6 +130,7 @@ async function makeEnvelope(plaintext) {
   return envelope;
 }
 function addMessage(text, meta, cls = '') {
+  document.querySelector('.empty-chat')?.remove();
   const line = document.createElement('div'); line.className = `message ${cls}`;
   line.innerHTML = `${escapeHtml(text)}<span class="meta">${escapeHtml(meta)}</span>`;
   $('messages').append(line); $('messages').scrollTop = $('messages').scrollHeight;
@@ -135,9 +149,16 @@ async function receive(envelope, historical = false) {
     const plain = await crypto.subtle.decrypt({name:'AES-GCM',iv:raw(envelope.nonce),additionalData:aad(envelope)},
       await sessionKey(), raw(envelope.ciphertext));
     localStorage.setItem(stateKey, String(Math.max(highest, envelope.sequence_number)));
-    addMessage(`${envelope.sender_id}: ${decoder.decode(plain)}`, `verified signature · sequence ${envelope.sequence_number}`);
+    addMessage(decoder.decode(plain), `Verified signature · seq ${envelope.sequence_number}`);
     await api('/api/delivered', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message_id:envelope.message_id})});
   } catch (error) { addMessage(`REJECTED: ${error.message}`, envelope.message_id, 'rejected'); }
+}
+async function showOwn(envelope) {
+  try {
+    const plain = await crypto.subtle.decrypt({name:'AES-GCM',iv:raw(envelope.nonce),additionalData:aad(envelope)},
+      await sessionKey(), raw(envelope.ciphertext));
+    addMessage(decoder.decode(plain), `Sent · seq ${envelope.sequence_number}`, 'own');
+  } catch (error) { addMessage(`Unable to read sent message: ${error.message}`, envelope.message_id, 'rejected'); }
 }
 function addDelivery(id, value) {
   let line = document.querySelector(`[data-delivery="${id}"]`);
@@ -160,6 +181,12 @@ async function refreshDashboard() {
   try {
     const data = await api('/api/dashboard');
     chat = data.chat;
+    if (me !== 'mallory') {
+      const other = me === 'alice' ? 'bob' : 'alice';
+      const online = Boolean(data.presence?.[other]);
+      $('peer-status').className = `peer-presence ${online ? 'online' : 'offline'}`;
+      $('peer-status').innerHTML = `<span class="presence-dot"></span>${online ? 'Online now' : 'Offline · messages will be queued'}`;
+    }
     status('audit-status', !data.audit_valid ? 'AUDIT FAILED · CHAT BLOCKED' : chat.blocked ? 'CHAT BLOCKED · START NEW CHAT' : `Audit valid · ${chat.session_id}`, !data.audit_valid || chat.blocked ? 'bad' : 'good');
     $('rekey').hidden = me === 'mallory' || !chat.blocked || !data.audit_valid;
     $('send-form').querySelector('button').disabled = chat.blocked || !data.audit_valid;
@@ -187,6 +214,7 @@ async function loadHistory() {
     if (seenMessages.has(e.message_id)) continue;
     seenMessages.add(e.message_id);
     if (e.receiver_id === me && e.session_id === chat.session_id) await receive(e, true);
+    else if (e.sender_id === me && e.session_id === chat.session_id) await showOwn(e);
     else addMessage(`Encrypted history · ${e.sender_id} → ${e.receiver_id}`,
       `${e.message_id.slice(0, 8)} · sequence ${e.sequence_number} · ${row.delivery_status}`);
   }
@@ -206,22 +234,26 @@ async function start(username) {
   me = username; $('login-panel').hidden = true; $('workspace').hidden = false;
   chat = (await api('/api/me')).chat;
   $('session-label').textContent = username.toUpperCase();
+  $('workspace-title').textContent = username === 'mallory' ? 'Attack laboratory' : 'Messages';
   $('chat-panel').hidden = username === 'mallory'; $('mallory-panel').hidden = username !== 'mallory';
-  if (username !== 'mallory') { $('chat-title').textContent = `${username.toUpperCase()} → ${username === 'alice' ? 'BOB' : 'ALICE'}`; await prepareKeys(); await syncSequence(); await loadHistory(); }
+  if (username !== 'mallory') { const other = username === 'alice' ? 'Bob' : 'Alice'; $('chat-title').textContent = other; $('peer-avatar').textContent = other[0]; await prepareKeys(); await syncSequence(); await loadHistory(); }
   else { await refreshCaptured(); await refreshAudit(); }
   status('connection-status', 'HTTP refresh', 'good'); await refreshDashboard();
   refreshTimer = setInterval(async () => {
     try { await refreshDashboard(); if (me !== 'mallory') { await refreshPeer(); await loadHistory(); } }
-    catch (error) { status('connection-status', `Refresh failed: ${error.message}`, 'bad'); }
+    catch (error) { if (error.message.includes('session expired or replaced')) { location.reload(); return; } status('connection-status', `Refresh failed: ${error.message}`, 'bad'); }
   }, 3000);
 }
 $('login-form').onsubmit = async event => {
   event.preventDefault(); showError('');
+  let loggedIn = false;
   try {
+    await reserveTab($('username').value);
     const response = await api('/api/login', {method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({username:$('username').value,password:$('password').value})});
+    loggedIn = true;
     await start(response.username);
-  } catch (error) { showError(error.message); $('login-panel').hidden = false; $('workspace').hidden = true; }
+  } catch (error) { if (loggedIn) await api('/api/logout', {method:'POST'}).catch(() => {}); freeTab(); me = null; showError(error.message); $('login-panel').hidden = false; $('workspace').hidden = true; }
 };
 $('send-form').onsubmit = async event => {
   event.preventDefault();
@@ -234,7 +266,7 @@ $('send-form').onsubmit = async event => {
     const result = await api('/api/send', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({envelope})});
     if (!result.accepted) throw new Error(result.reason);
     seenMessages.add(envelope.message_id);
-    addMessage(`you: ${plaintext}`, `encrypted and signed · sequence ${envelope.sequence_number}`, 'own');
+    addMessage(plaintext, `Encrypted and signed · seq ${envelope.sequence_number}`, 'own');
     addDelivery(envelope.message_id, result.delivery_status);
     addEvidence(envelope);
     $('message-text').value = '';
@@ -271,7 +303,7 @@ document.querySelectorAll('[data-attack]').forEach(button => button.onclick = as
 });
 $('logout').onclick = async () => {
   await api('/api/logout', {method:'POST'});
-  me = null; if (refreshTimer) clearInterval(refreshTimer); location.reload();
+  me = null; freeTab(); if (refreshTimer) clearInterval(refreshTimer); location.reload();
 };
 $('rekey').onclick = async () => {
   try {
@@ -282,4 +314,4 @@ $('rekey').onclick = async () => {
     addMessage(`New chat started: ${chat.session_id}`, 'new encryption context', 'own');
   } catch (error) { addMessage(`REKEY FAILED: ${error.message}`, 'local', 'rejected'); }
 };
-(async () => { try { const value = await api('/api/me'); await start(value.username); } catch { /* login form */ } })();
+(async () => { try { const value = await api('/api/me'); await reserveTab(value.username); await start(value.username); } catch (error) { if (error.message.includes('already open in another tab')) showError(error.message); } })();
