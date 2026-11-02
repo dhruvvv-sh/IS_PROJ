@@ -25,6 +25,7 @@ from .protocol import EnvelopeError, aad, decode_base64, validate_envelope
 from cipherchat.crypto.identity import Identity
 from cipherchat.crypto.key_exchange import public_key_bytes
 from cipherchat.security.attacks import KeySubstitutionError, verify_expected_public_key
+from cipherchat.security.recovery import RecoveryState
 
 STATIC = Path(__file__).with_name("static")
 USERS = {"alice", "bob", "mallory"}
@@ -217,6 +218,9 @@ async def register(request: Request):
     except (ValueError, KeyError) as error:
         if "mismatch" in str(error):
             db.event("KEY_SUBSTITUTION", username, None, {"reason": str(error)})
+            db.recovery_transition(username, None, RecoveryState.SECURE,
+                                   (RecoveryState.SUSPECTED_ATTACK, RecoveryState.QUARANTINED),
+                                   {"incident_type": "KEY_SUBSTITUTION", "reason": str(error)})
         raise HTTPException(409, str(error)) from error
     return {"username": username, "keys": db.identity(username)}
 
@@ -267,24 +271,35 @@ def _classify(error: str) -> str:
     return "INVALID_MESSAGE"
 
 
+def _quarantine(db: Database, actor: str, message_id: str | None, event_type: str, reason: str) -> None:
+    db.recovery_transition(actor, message_id, RecoveryState.SECURE,
+                           (RecoveryState.SUSPECTED_ATTACK, RecoveryState.QUARANTINED),
+                           {"incident_type": event_type, "reason": reason})
+
+
 def _submit(db: Database, actor: str, envelope: dict, simulated: bool = False,
             verification_time: datetime | None = None) -> dict:
     try:
         _check(db)
         state = db.chat_state()
         if state["blocked"]:
-            return {"accepted": False, "reason": "chat blocked; Alice or Bob can start a new chat", "event_type": "CHAT_BLOCKED"}
+            return {"accepted": False, "reason": f"chat is {state['state'].lower()}; recovery is required",
+                    "event_type": state["state"]}
         if not isinstance(envelope, dict):
             db.event("INVALID_MESSAGE", actor, None, {"reason": "envelope must be an object"})
             return {"accepted": False, "reason": "envelope must be an object", "event_type": "INVALID_MESSAGE"}
         if not simulated and actor != envelope.get("sender_id"):
-            db.event("IMPERSONATION", actor, envelope.get("message_id"), {"reason": "authenticated actor differs from claimed sender"})
-            db.event("CHAT_BLOCKED", actor, envelope.get("message_id"), {"reason": "impersonation attempt"})
+            reason = "authenticated actor differs from claimed sender"
+            db.event("IMPERSONATION", actor, envelope.get("message_id"), {"reason": reason})
+            _quarantine(db, actor, envelope.get("message_id"), "IMPERSONATION", reason)
             return {"accepted": False, "reason": "authenticated sender mismatch", "event_type": "IMPERSONATION"}
         sender = envelope.get("sender_id")
         keys = db.identity(sender) if sender in {"alice", "bob"} else None
         if not keys:
-            db.event("AUTHENTICATION_FAILURE", actor, envelope.get("message_id"), {"reason": "sender has no registered key"})
+            reason = "sender has no registered key"
+            db.event("AUTHENTICATION_FAILURE", actor, envelope.get("message_id"), {"reason": reason})
+            if simulated:
+                _quarantine(db, actor, envelope.get("message_id"), "AUTHENTICATION_FAILURE", reason)
             return {"accepted": False, "reason": "sender key not registered", "event_type": "AUTHENTICATION_FAILURE"}
         try:
             validate_envelope(envelope, bytes.fromhex(keys["signing_public"]),
@@ -296,16 +311,18 @@ def _submit(db: Database, actor: str, envelope: dict, simulated: bool = False,
             reason = str(error)
             event_type = _classify(reason)
             db.event(event_type, actor, envelope.get("message_id"), {"reason": reason, "claimed_sender": sender})
-            if event_type == "TAMPERING":
-                db.event("CHAT_BLOCKED", actor, envelope.get("message_id"), {"reason": reason})
+            if simulated or event_type in {"TAMPERING", "TIMESTAMP_REJECTED"}:
+                _quarantine(db, actor, envelope.get("message_id"), event_type, reason)
             return {"accepted": False, "reason": reason, "event_type": event_type}
         accepted, reason = db.accept(envelope)
         if not accepted:
+            if "chat blocked or session changed" in reason:
+                return {"accepted": False, "reason": reason, "event_type": "SESSION_UNAVAILABLE"}
             db.event("REPLAY", actor, envelope["message_id"],
                      {"reason": reason, "verified_sender": sender,
                       "attempted_timestamp": envelope["timestamp"],
                       "sequence_number": envelope["sequence_number"]})
-            db.event("CHAT_BLOCKED", actor, envelope["message_id"], {"reason": reason})
+            _quarantine(db, actor, envelope["message_id"], "REPLAY", reason)
             return {"accepted": False, "reason": reason, "event_type": "REPLAY"}
         return {"accepted": True, "reason": "accepted", "delivery_status": "QUEUED"}
     except HTTPException as error:
@@ -351,11 +368,29 @@ def rekey(request: Request):
     db = _db(request)
     _check(db)
     state = db.chat_state()
-    if not state["blocked"]:
-        raise HTTPException(409, "chat is already active")
-    db.event("CHAT_REKEYED", username, None, {"generation": state["generation"] + 1,
-                                               "reason": "new session after security incident"})
-    return {"chat": db.chat_state()}
+    if state["state"] == RecoveryState.BLOCKED.value and state["incident_type"] == "LEGACY_BLOCK":
+        db.event("CHAT_REKEYED", username, None, {"generation": state["generation"] + 1,
+                                                   "reason": "migrate a chat blocked by the previous recovery flow"})
+        return {"chat": db.chat_state(), "verified": True}
+    if state["state"] == RecoveryState.BLOCKED.value:
+        raise HTTPException(409, "verification failed; this relationship is blocked")
+    if state["state"] != RecoveryState.QUARANTINED.value:
+        raise HTTPException(409, "chat is not quarantined")
+    if state["incident_type"] == "KEY_SUBSTITUTION":
+        db.recovery_transition(username, None, RecoveryState.QUARANTINED,
+                               (RecoveryState.VERIFYING, RecoveryState.BLOCKED),
+                               {"reason": "presented peer key differs from registered key"})
+        return {"chat": db.chat_state(), "verified": False}
+    if not db.identity("alice") or not db.identity("bob"):
+        db.recovery_transition(username, None, RecoveryState.QUARANTINED,
+                               (RecoveryState.VERIFYING, RecoveryState.BLOCKED),
+                               {"reason": "both registered identities required"})
+        return {"chat": db.chat_state(), "verified": False}
+    if not db.recovery_transition(username, None, RecoveryState.QUARANTINED,
+                                  (RecoveryState.VERIFYING, RecoveryState.REKEYING, RecoveryState.SECURE),
+                                  {"reason": "audit and registered identities verified"}):
+        raise HTTPException(409, "recovery state changed; refresh chat")
+    return {"chat": db.chat_state(), "verified": True}
 
 
 @app.post("/api/mallory/attack")
@@ -415,6 +450,7 @@ async def mallory_attack(request: Request):
             verify_expected_public_key(bytes.fromhex(registered["exchange_public"]), presented)
         except KeySubstitutionError as error:
             db.event("KEY_SUBSTITUTION", "mallory", None, {"reason": str(error), "presented_public_key": presented.hex()})
+            _quarantine(db, "mallory", None, "KEY_SUBSTITUTION", str(error))
             return {"attack": attack, "accepted": False, "reason": str(error),
                     "expected_public_key": registered["exchange_public"], "presented_public_key": presented.hex()}
         raise HTTPException(500, "substitution unexpectedly passed")

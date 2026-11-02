@@ -14,6 +14,7 @@ from cipherchat.crypto.key_exchange import derive_shared_secret
 from cipherchat.realtime.database import AuditFailure
 from cipherchat.realtime.protocol import EnvelopeError, aad, signing_bytes, validate_envelope
 from cipherchat.realtime import server
+from cipherchat.security.recovery import RecoveryMachine, RecoveryState
 
 
 def envelope_for(alice, bob, sequence=1, timestamp=None, plaintext=b"hello", session_id="alice-bob:1", sender="alice"):
@@ -105,13 +106,37 @@ class MemoryDatabase:
         self.audit.append({"number": len(self.audit) + 1, "kind": "SECURITY_EVENT", "record_hash": "b" * 64})
 
     def chat_state(self):
-        generation, blocked = 1, False
+        generation, state, incident_type = 1, RecoveryState.SECURE, None
         for row in self.security_events:
             if row["event_type"] == "CHAT_BLOCKED":
-                blocked = True
+                state = RecoveryState.BLOCKED
+                incident_type = "LEGACY_BLOCK"
             elif row["event_type"] == "CHAT_REKEYED":
-                generation, blocked = row["detail"]["generation"], False
-        return {"generation": generation, "session_id": f"alice-bob:{generation}", "blocked": blocked}
+                generation, state, incident_type = row["detail"]["generation"], RecoveryState.SECURE, None
+            elif row["event_type"] == "RECOVERY_STATE":
+                detail = row["detail"]
+                state = RecoveryState(detail["state"])
+                if state is RecoveryState.SUSPECTED_ATTACK:
+                    incident_type = detail.get("incident_type")
+                elif state is RecoveryState.SECURE:
+                    generation, incident_type = detail["generation"], None
+        return {"generation": generation, "session_id": f"alice-bob:{generation}",
+                "state": state.value, "blocked": state is not RecoveryState.SECURE,
+                "incident_type": incident_type}
+
+    def recovery_transition(self, actor, message_id, expected, transitions, detail=None):
+        if self.chat_state()["state"] != expected.value:
+            return False
+        machine = RecoveryMachine()
+        machine.state = expected
+        generation = self.chat_state()["generation"]
+        for target in transitions:
+            machine.transition(target)
+            payload = {**(detail or {}), "state": target.value, "session_id": f"alice-bob:{generation}"}
+            if target is RecoveryState.SECURE:
+                payload["generation"] = generation + 1
+            self.event("RECOVERY_STATE", actor, message_id, payload)
+        return True
 
     def accept(self, item):
         key = (item["sender_id"], item["conversation_id"])
@@ -195,19 +220,22 @@ def test_authenticated_http_replay_tamper_impersonation_and_rekey(monkeypatch):
         assert client.post("/api/delivered", cookies=cookies["bob"], json={"message_id": item["message_id"]}).json()["ok"]
         assert database.saved[item["message_id"]]["delivery_status"] == "DELIVERED"
         assert client.post("/api/mallory/attack", cookies=cookies["mallory"], json={"attack": "eavesdrop"}).json()["wrong_key_rejected"]
-        assert client.post("/api/mallory/attack", cookies=cookies["mallory"], json={"attack": "key_substitution"}).json()["accepted"] is False
         for attack, expected in (("replay", "REPLAY"), ("tamper", "TAMPERING"), ("impersonate", "IMPERSONATION"), ("stale", "TIMESTAMP_REJECTED")):
-            if database.chat_state()["blocked"]:
+            if database.chat_state()["state"] == "QUARANTINED":
                 assert client.post("/api/rekey", cookies=cookies["alice"]).json()["chat"]["blocked"] is False
             response = client.post("/api/mallory/attack", cookies=cookies["mallory"], json={"attack": attack, "message_id": item["message_id"]})
             assert response.status_code == 200
             assert response.json()["event_type"] == expected
             assert response.json()["accepted"] is False
-        assert client.get("/api/dashboard", cookies=cookies["alice"]).json()["chat"]["blocked"] is False
-        assert client.post("/api/rekey", cookies=cookies["mallory"]).status_code == 403
+        assert client.get("/api/dashboard", cookies=cookies["alice"]).json()["chat"]["state"] == "QUARANTINED"
+        assert client.post("/api/rekey", cookies=cookies["alice"]).json()["chat"]["state"] == "SECURE"
         new = envelope_for(alice, bob, sequence=2, session_id=database.chat_state()["session_id"])
         assert client.post("/api/send", cookies=cookies["alice"], json={"envelope": new}).json()["accepted"] is True
         assert client.get("/api/history", cookies=cookies["bob"]).json()["messages"][-1]["envelope"] == new
+        assert client.post("/api/mallory/attack", cookies=cookies["mallory"], json={"attack": "key_substitution"}).json()["accepted"] is False
+        assert database.chat_state()["state"] == "QUARANTINED"
+        assert client.post("/api/rekey", cookies=cookies["alice"]).json()["chat"]["state"] == "BLOCKED"
+        assert client.post("/api/rekey", cookies=cookies["mallory"]).status_code == 403
         assert client.post("/api/logout", cookies=cookies["bob"]).status_code == 200
         assert client.get("/api/me", cookies=cookies["alice"]).json()["presence"]["bob"] is False
         new_bob = client.post("/api/login", json={"username": "bob", "password": "bob-password"})

@@ -70,15 +70,15 @@ def test_both_directions_delivery_and_ciphertext_only(lab):
     assert client.get("/api/dashboard", cookies=cookies["alice"]).json()["stats"]["messages_delivered"] == 2
 
 
-@pytest.mark.parametrize("attack,event_type,blocks", [
+@pytest.mark.parametrize("attack,event_type,quarantines", [
     ("replay", "REPLAY", True),
     ("tamper", "TAMPERING", True),
     ("impersonate", "IMPERSONATION", True),
-    ("stale", "TIMESTAMP_REJECTED", False),
+    ("stale", "TIMESTAMP_REJECTED", True),
     ("eavesdrop", "EAVESDROP", False),
-    ("key_substitution", "KEY_SUBSTITUTION", False),
+    ("key_substitution", "KEY_SUBSTITUTION", True),
 ])
-def test_every_attack_command(lab, attack, event_type, blocks):
+def test_every_attack_command(lab, attack, event_type, quarantines):
     client, cookies, db, alice, bob = lab
     envelope = envelope_for(alice, bob)
     assert post(client, cookies, "alice", "/api/send", {"envelope": envelope}).json()["accepted"]
@@ -95,10 +95,19 @@ def test_every_attack_command(lab, attack, event_type, blocks):
         if attack != "key_substitution":
             assert payload["event_type"] == event_type
     assert any(row["event_type"] == event_type for row in db.events())
-    assert db.chat_state()["blocked"] is blocks
+    assert db.chat_state()["state"] == ("QUARANTINED" if quarantines else "SECURE")
     assert len(db.saved) == 1
-    if blocks:
-        assert post(client, cookies, "bob", "/api/rekey", {}).json()["chat"]["session_id"] == "alice-bob:2"
+    if quarantines:
+        assert post(client, cookies, "bob", "/api/send", {"envelope": envelope_for(alice, bob, sequence=2)}).json()["accepted"] is False
+        recovery = post(client, cookies, "bob", "/api/rekey", {}).json()
+        if attack == "key_substitution":
+            assert recovery["chat"]["state"] == "BLOCKED"
+            assert recovery["verified"] is False
+            return
+        assert recovery["chat"]["state"] == "SECURE"
+        assert recovery["chat"]["session_id"] == "alice-bob:2"
+        assert [e["detail"]["state"] for e in reversed(db.events()) if e["event_type"] == "RECOVERY_STATE"] == [
+            "SUSPECTED_ATTACK", "QUARANTINED", "VERIFYING", "REKEYING", "SECURE"]
         next_message = envelope_for(alice, bob, sequence=2, session_id="alice-bob:2")
         assert post(client, cookies, "alice", "/api/send", {"envelope": next_message}).json()["accepted"]
 
@@ -128,6 +137,7 @@ def test_each_tamper_field_rejected(lab, field):
     assert result.json()["accepted"] is False
     assert result.json()["event_type"] in {"TAMPERING", "INVALID_MESSAGE", "TIMESTAMP_REJECTED", "AUTHENTICATION_FAILURE"}
     assert len(db.saved) == 1
+    assert db.chat_state()["state"] == "QUARANTINED"
 
 
 def test_valid_signature_for_wrong_session_is_rejected(lab):
@@ -137,6 +147,17 @@ def test_valid_signature_for_wrong_session_is_rejected(lab):
     assert result["accepted"] is False
     assert result["reason"] == "session changed; refresh chat"
     assert db.saved == {}
+
+
+def test_preexisting_blocked_chat_can_migrate_to_new_recovery_flow(lab):
+    client, cookies, db, alice, bob = lab
+    db.event("CHAT_BLOCKED", "mallory", None, {"reason": "older deployment"})
+    assert db.chat_state()["incident_type"] == "LEGACY_BLOCK"
+    result = post(client, cookies, "alice", "/api/rekey", {}).json()
+    assert result["verified"] is True
+    assert result["chat"]["state"] == "SECURE"
+    assert post(client, cookies, "alice", "/api/send", {
+        "envelope": envelope_for(alice, bob, session_id="alice-bob:2")}).json()["accepted"]
 
 
 @pytest.mark.parametrize("mutation,expected", [
@@ -160,10 +181,12 @@ def test_expired_timestamp_duplicate_sequence_and_role_permissions(lab):
     client, cookies, db, alice, bob = lab
     old = envelope_for(alice, bob, timestamp=datetime.now(timezone.utc) - timedelta(minutes=10))
     assert post(client, cookies, "alice", "/api/send", {"envelope": old}).json()["event_type"] == "TIMESTAMP_REJECTED"
-    first = envelope_for(alice, bob)
+    assert db.chat_state()["state"] == "QUARANTINED"
+    assert post(client, cookies, "alice", "/api/rekey", {}).json()["chat"]["state"] == "SECURE"
+    first = envelope_for(alice, bob, session_id="alice-bob:2")
     assert post(client, cookies, "alice", "/api/send", {"envelope": first}).json()["accepted"]
-    assert post(client, cookies, "alice", "/api/send", {"envelope": envelope_for(alice, bob, sequence=1)}).json()["event_type"] == "REPLAY"
-    assert db.chat_state()["blocked"]
+    assert post(client, cookies, "alice", "/api/send", {"envelope": envelope_for(alice, bob, sequence=1, session_id="alice-bob:2")}).json()["event_type"] == "REPLAY"
+    assert db.chat_state()["state"] == "QUARANTINED"
     assert post(client, cookies, "mallory", "/api/send", {"envelope": first}).status_code == 403
     assert post(client, cookies, "mallory", "/api/rekey", {}).status_code == 403
     assert post(client, cookies, "alice", "/api/mallory/attack", {"attack": "replay", "message_id": first["message_id"]}).status_code == 403

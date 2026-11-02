@@ -187,8 +187,14 @@ async function refreshDashboard() {
       $('peer-status').className = `peer-presence ${online ? 'online' : 'offline'}`;
       $('peer-status').innerHTML = `<span class="presence-dot"></span>${online ? 'Online now' : 'Offline · messages will be queued'}`;
     }
-    status('audit-status', !data.audit_valid ? 'AUDIT FAILED · CHAT BLOCKED' : chat.blocked ? 'CHAT BLOCKED · START NEW CHAT' : `Audit valid · ${chat.session_id}`, !data.audit_valid || chat.blocked ? 'bad' : 'good');
-    $('rekey').hidden = me === 'mallory' || !chat.blocked || !data.audit_valid;
+    const recovery = chat.state || (chat.blocked ? 'BLOCKED' : 'SECURE');
+    status('audit-status', !data.audit_valid ? 'AUDIT FAILED · CHAT BLOCKED' :
+      recovery === 'QUARANTINED' ? `QUARANTINED · ${chat.incident_type || 'INCIDENT'} · VERIFY TO RESUME` :
+      recovery === 'BLOCKED' ? 'VERIFICATION FAILED · CHAT BLOCKED' : `Audit valid · ${chat.session_id}`,
+      !data.audit_valid || recovery === 'BLOCKED' ? 'bad' : recovery === 'QUARANTINED' ? 'warning' : 'good');
+    const legacy = recovery === 'BLOCKED' && chat.incident_type === 'LEGACY_BLOCK';
+    $('rekey').hidden = me === 'mallory' || (recovery !== 'QUARANTINED' && !legacy) || !data.audit_valid;
+    $('rekey').textContent = legacy ? 'Start new chat' : 'Verify & rekey';
     $('send-form').querySelector('button').disabled = chat.blocked || !data.audit_valid;
     const counts = data.stats || {};
     const metrics = [['Sent',counts.messages_sent || 0],['Delivered',counts.messages_delivered || 0],
@@ -261,7 +267,7 @@ $('send-form').onsubmit = async event => {
   if (!plaintext) return;
   try {
     if (encoder.encode(plaintext).length > 65536) throw new Error('Message exceeds 65,536 bytes');
-    if (chat.blocked) throw new Error('Chat blocked; start a new chat');
+    if (chat.blocked) throw new Error(`Chat ${chat.state?.toLowerCase() || 'blocked'}; verify the incident first`);
     const envelope = await makeEnvelope(plaintext);
     const result = await api('/api/send', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({envelope})});
     if (!result.accepted) throw new Error(result.reason);
@@ -309,6 +315,7 @@ $('rekey').onclick = async () => {
   try {
     const result = await api('/api/rekey', {method:'POST'});
     chat = result.chat;
+    if (!result.verified) { await refreshDashboard(); addMessage('Verification failed; chat blocked', 'security recovery', 'rejected'); return; }
     await syncSequence();
     await refreshDashboard();
     addMessage(`New chat started: ${chat.session_id}`, 'new encryption context', 'own');

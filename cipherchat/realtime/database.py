@@ -12,6 +12,7 @@ from pathlib import Path
 import mysql.connector
 
 from .protocol import canonical
+from cipherchat.security.recovery import RecoveryMachine, RecoveryState
 
 GENESIS = "0" * 64
 
@@ -401,15 +402,61 @@ class Database:
             conn.close()
 
     def _chat_state(self, cur):
-        cur.execute("SELECT event_type, detail_json FROM cc_security_events WHERE event_type IN ('CHAT_BLOCKED', 'CHAT_REKEYED') ORDER BY id")
-        generation, blocked = 1, False
+        cur.execute("SELECT event_type, detail_json FROM cc_security_events WHERE event_type IN ('CHAT_BLOCKED', 'CHAT_REKEYED', 'RECOVERY_STATE') ORDER BY id")
+        generation, recovery, incident_type = 1, RecoveryState.SECURE, None
         for event_type, raw in cur.fetchall():
             if event_type == "CHAT_BLOCKED":
-                blocked = True
+                recovery = RecoveryState.BLOCKED
+                incident_type = "LEGACY_BLOCK"
             elif event_type == "CHAT_REKEYED":
                 generation = int(_payload(raw)["generation"])
-                blocked = False
-        return {"session_id": f"alice-bob:{generation}", "generation": generation, "blocked": blocked}
+                recovery, incident_type = RecoveryState.SECURE, None
+            else:
+                detail = _payload(raw)
+                recovery = RecoveryState(detail["state"])
+                if recovery is RecoveryState.SUSPECTED_ATTACK:
+                    incident_type = detail.get("incident_type")
+                elif recovery is RecoveryState.SECURE:
+                    generation = int(detail["generation"])
+                    incident_type = None
+        return {"session_id": f"alice-bob:{generation}", "generation": generation,
+                "state": recovery.value, "blocked": recovery is not RecoveryState.SECURE,
+                "incident_type": incident_type}
+
+    def recovery_transition(self, actor: str, message_id: str | None, expected: RecoveryState,
+                            transitions: tuple[RecoveryState, ...], detail: dict | None = None):
+        """Persist each permitted FSM step and its evidence under one admission lock."""
+        conn = self.connect()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT record_count FROM cc_audit_head WHERE singleton = 1 FOR UPDATE")
+            if cur.fetchone() is None:
+                raise AuditFailure("audit head missing")
+            self._verify(cur)
+            state = self._chat_state(cur)
+            if state["state"] != expected.value:
+                conn.rollback()
+                return False
+            machine = RecoveryMachine()
+            machine.state = expected
+            for target in transitions:
+                machine.transition(target)
+                payload = {**(detail or {}), "state": target.value, "session_id": state["session_id"]}
+                if target is RecoveryState.SECURE:
+                    payload["generation"] = state["generation"] + 1
+                timestamp = _now()
+                event = {"timestamp": timestamp, "event_type": "RECOVERY_STATE", "actor": actor,
+                         "message_id": message_id, "detail": payload}
+                self._append_audit(cur, "SECURITY_EVENT", event)
+                cur.execute("INSERT INTO cc_security_events (timestamp, event_type, actor, message_id, detail_json) VALUES (%s, %s, %s, %s, %s)",
+                            (timestamp, "RECOVERY_STATE", actor, message_id, canonical(payload).decode()))
+            conn.commit()
+            return True
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def chat_state(self):
         conn = self.connect()

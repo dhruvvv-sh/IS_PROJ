@@ -128,13 +128,13 @@ def test_mysql_http_chat_and_every_mallory_command(monkeypatch):
                     "exchange_public": identity.public_material()["public_key"],
                     "signing_public": identity.signing_public_key_bytes.hex()}).status_code == 200
             generation = 1
-            for sequence, (attack, event_type, blocks) in enumerate((
+            for sequence, (attack, event_type, quarantines) in enumerate((
                 ("eavesdrop", "EAVESDROP", False),
-                ("key_substitution", "KEY_SUBSTITUTION", False),
-                ("stale", "TIMESTAMP_REJECTED", False),
+                ("stale", "TIMESTAMP_REJECTED", True),
                 ("replay", "REPLAY", True),
                 ("tamper", "TAMPERING", True),
                 ("impersonate", "IMPERSONATION", True),
+                ("key_substitution", "KEY_SUBSTITUTION", True),
             ), start=1):
                 envelope = envelope_for(alice, bob, sequence=sequence, session_id=f"alice-bob:{generation}")
                 sent = client.post("/api/send", cookies=cookies["alice"], json={"envelope": envelope})
@@ -154,10 +154,13 @@ def test_mysql_http_chat_and_every_mallory_command(monkeypatch):
                     assert result.json()["event_type"] == event_type
                     assert result.json()["accepted"] is False
                 assert any(event["event_type"] == event_type for event in db.events())
-                assert db.chat_state()["blocked"] is blocks
-                if blocks:
+                assert db.chat_state()["state"] == ("QUARANTINED" if quarantines else "SECURE")
+                if quarantines:
                     response = client.post("/api/rekey", cookies=cookies["bob"])
                     assert response.status_code == 200
+                    if attack == "key_substitution":
+                        assert response.json()["chat"]["state"] == "BLOCKED"
+                        continue
                     generation += 1
                     assert response.json()["chat"]["generation"] == generation
             assert db.verify()["record_count"] > 0

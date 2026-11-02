@@ -1,1 +1,1 @@
-"""Authenticated WebSocket relay and browser attack laboratory."""
+"""Authenticated HTTP chat relay and browser attack laboratory."""
