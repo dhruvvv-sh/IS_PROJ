@@ -1,0 +1,35 @@
+services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${CIPHERCHAT_MYSQL_DATABASE:-cipherchat_central}
+      MYSQL_USER: ${CIPHERCHAT_MYSQL_USER:-cipheruser}
+      MYSQL_PASSWORD: ${CIPHERCHAT_MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${CIPHERCHAT_MYSQL_PASSWORD:?Set CIPHERCHAT_MYSQL_PASSWORD in .env.central}
+    ports:
+      - "127.0.0.1:3306:3306"
+    volumes:
+      - cipherchat_mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env.central
+    environment:
+      CIPHERCHAT_MYSQL_HOST: mysql
+      CIPHERCHAT_MYSQL_PORT: "3306"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    ports:
+      - "${CIPHERCHAT_BIND_PORT:-8765}:${CIPHERCHAT_BIND_PORT:-8765}"
+
+volumes:
+  cipherchat_mysql:
