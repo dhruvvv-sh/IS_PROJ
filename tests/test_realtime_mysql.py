@@ -6,10 +6,12 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from fastapi.testclient import TestClient
 
 from cipherchat.crypto.identity import Identity
 from cipherchat.crypto.key_exchange import public_key_bytes
 from cipherchat.realtime.database import AuditFailure, Config, Database, GENESIS
+from cipherchat.realtime import server
 from tests.test_realtime import envelope_for
 
 
@@ -20,13 +22,27 @@ def test_mysql_replay_survives_restart_concurrent_sequence_and_audit_tamper(tmp_
     conn = database.connect()
     try:
         cur = conn.cursor()
-        for table in ("cc_audit_records", "cc_messages", "cc_message_state", "cc_users", "cc_security_events"):
+        for table in ("cc_audit_records", "cc_messages", "cc_message_state", "cc_users", "cc_security_events", "cc_role_sessions"):
             cur.execute("SELECT COUNT(*) FROM " + table)
             assert cur.fetchone()[0] == 0, "live test requires an empty disposable demo database"
     finally:
         conn.close()
     alice, bob = Identity.create("alice"), Identity.create("bob")
     try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            claims = list(pool.map(lambda token: database.claim_session("bob", token), ("a" * 64, "b" * 64)))
+        assert sum(claims) == 1
+        winner = ("a" * 64, "b" * 64)[claims.index(True)]
+        loser = ("b" * 64, "a" * 64)[claims.index(True)]
+        assert database.presence()["bob"] is True
+        assert database.touch_session("bob", winner) is True
+        assert database.touch_session("bob", loser) is False
+        database.release_session("bob", loser)
+        assert database.presence()["bob"] is True
+        database.release_session("bob", winner)
+        assert database.presence()["bob"] is False
+        assert database.claim_session("bob", "c" * 64) is True
+        database.release_session("bob", "c" * 64)
         first = envelope_for(alice, bob, sequence=1)
         assert database.accept(first)[0] is True
         checkpoint = tmp_path / "trusted.checkpoint.json"
@@ -71,7 +87,107 @@ def test_mysql_replay_survives_restart_concurrent_sequence_and_audit_tamper(tmp_
         conn = database.connect()
         try:
             cur = conn.cursor()
-            for table in ("cc_security_events", "cc_messages", "cc_message_state", "cc_users", "cc_audit_records"):
+            for table in ("cc_role_sessions", "cc_security_events", "cc_messages", "cc_message_state", "cc_users", "cc_audit_records"):
+                cur.execute("DELETE FROM " + table)
+            cur.execute("UPDATE cc_audit_head SET record_count=0, record_hash=%s WHERE singleton=1", (GENESIS,))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+@pytest.mark.skipif(os.getenv("CIPHERCHAT_TEST_MYSQL") != "1", reason="set CIPHERCHAT_TEST_MYSQL=1 for live MySQL integration test")
+def test_mysql_http_chat_and_every_mallory_command(monkeypatch):
+    """Exercise all attack endpoints against transactional storage in a disposable schema."""
+    db = Database(Config.from_env())
+    db.migrate()
+    conn = db.connect()
+    try:
+        cur = conn.cursor()
+        for table in ("cc_audit_records", "cc_messages", "cc_message_state", "cc_users", "cc_security_events", "cc_role_sessions"):
+            cur.execute("SELECT COUNT(*) FROM " + table)
+            assert cur.fetchone()[0] == 0, "live test requires an empty disposable demo database"
+    finally:
+        conn.close()
+    monkeypatch.setenv("CIPHERCHAT_SESSION_SECRET", "m" * 40)
+    monkeypatch.setenv("CIPHERCHAT_ENABLE_DESTRUCTIVE_DEMO", "1")
+    for role in ("alice", "bob", "mallory"):
+        monkeypatch.setenv(f"CIPHERCHAT_{role.upper()}_PASSWORD", f"{role}-password")
+    server._database.cache_clear()
+    alice, bob = Identity.create("alice"), Identity.create("bob")
+    try:
+        with TestClient(server.app) as client:
+            cookies = {}
+            for role in ("alice", "bob", "mallory"):
+                response = client.post("/api/login", json={"username": role, "password": f"{role}-password"})
+                assert response.status_code == 200
+                cookies[role] = {"cipherchat_session": response.cookies["cipherchat_session"]}
+            client.cookies.clear()
+            assert client.post("/api/login", json={"username": "bob", "password": "bob-password"}).status_code == 409
+            for role, identity in (("alice", alice), ("bob", bob)):
+                assert client.post("/api/identity", cookies=cookies[role], json={
+                    "exchange_public": identity.public_material()["public_key"],
+                    "signing_public": identity.signing_public_key_bytes.hex()}).status_code == 200
+            generation = 1
+            for sequence, (attack, event_type, blocks) in enumerate((
+                ("eavesdrop", "EAVESDROP", False),
+                ("key_substitution", "KEY_SUBSTITUTION", False),
+                ("stale", "TIMESTAMP_REJECTED", False),
+                ("replay", "REPLAY", True),
+                ("tamper", "TAMPERING", True),
+                ("impersonate", "IMPERSONATION", True),
+            ), start=1):
+                envelope = envelope_for(alice, bob, sequence=sequence, session_id=f"alice-bob:{generation}")
+                sent = client.post("/api/send", cookies=cookies["alice"], json={"envelope": envelope})
+                assert sent.status_code == 200 and sent.json()["accepted"] is True
+                assert client.get("/api/history", cookies=cookies["bob"]).json()["messages"][-1]["envelope"] == envelope
+                assert client.post("/api/delivered", cookies=cookies["bob"],
+                                   json={"message_id": envelope["message_id"]}).status_code == 200
+                assert db.message(envelope["message_id"])["delivery_status"] == "DELIVERED"
+                result = client.post("/api/mallory/attack", cookies=cookies["mallory"],
+                                     json={"attack": attack, "message_id": envelope["message_id"]})
+                assert result.status_code == 200
+                if attack == "eavesdrop":
+                    assert result.json()["plaintext_access"] is False
+                elif attack == "key_substitution":
+                    assert result.json()["accepted"] is False
+                else:
+                    assert result.json()["event_type"] == event_type
+                    assert result.json()["accepted"] is False
+                assert any(event["event_type"] == event_type for event in db.events())
+                assert db.chat_state()["blocked"] is blocks
+                if blocks:
+                    response = client.post("/api/rekey", cookies=cookies["bob"])
+                    assert response.status_code == 200
+                    generation += 1
+                    assert response.json()["chat"]["generation"] == generation
+            assert db.verify()["record_count"] > 0
+            conn = db.connect()
+            try:
+                cur = conn.cursor()
+                for table, expected in (("cc_messages", 6), ("cc_role_sessions", 3)):
+                    cur.execute("SELECT COUNT(*) FROM " + table)
+                    assert cur.fetchone()[0] == expected
+                cur.execute("SELECT envelope FROM cc_messages")
+                assert all(b"hello" not in (row[0].encode() if isinstance(row[0], str) else row[0])
+                           for row in cur.fetchall())
+                cur.execute("SELECT detail_json FROM cc_security_events")
+                assert all(b"hello" not in (row[0].encode() if isinstance(row[0], str) else row[0])
+                           for row in cur.fetchall())
+                cur.execute("SELECT COUNT(*) FROM cc_security_events")
+                assert cur.fetchone()[0] >= 6
+            finally:
+                conn.close()
+            record_number = db.audit_rows()[-1]["number"]
+            deleted = client.post("/api/mallory/attack", cookies=cookies["mallory"],
+                                  json={"attack": "delete_record", "record_number": record_number})
+            assert deleted.status_code == 200 and deleted.json()["chat_blocked"] is True
+            assert client.get("/api/dashboard", cookies=cookies["alice"]).json()["audit_valid"] is False
+    finally:
+        server._database.cache_clear()
+        conn = db.connect()
+        try:
+            cur = conn.cursor()
+            for table in ("cc_role_sessions", "cc_security_events", "cc_messages", "cc_message_state", "cc_users", "cc_audit_records"):
                 cur.execute("DELETE FROM " + table)
             cur.execute("UPDATE cc_audit_head SET record_count=0, record_hash=%s WHERE singleton=1", (GENESIS,))
             conn.commit()

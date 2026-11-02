@@ -1,5 +1,9 @@
 # CipherChat on Vercel
 
+For the three-computer simulation where Alice's MacBook owns MySQL and the API,
+use [CENTRAL_PC_SETUP.md](CENTRAL_PC_SETUP.md). The instructions below describe
+the alternative direct Vercel-to-managed-MySQL setup.
+
 The app exports `app` from the root `app.py`, which Vercel detects as a FastAPI
 entry point. Its transport is HTTP only. The browser requests new messages and
 security events every three seconds. A shared, persistent MySQL database is

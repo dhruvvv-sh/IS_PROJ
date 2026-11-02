@@ -8,11 +8,14 @@ import json
 import os
 import secrets
 import time
+from datetime import datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlparse
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -87,6 +90,46 @@ STATIC.mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
+@app.middleware("http")
+async def central_api_or_frontend_proxy(request: Request, call_next):
+    """Keep the Vercel page same-origin while its API runs on Alice's MacBook."""
+    path = request.url.path
+    upstream = os.getenv("CIPHERCHAT_API_UPSTREAM_URL", "").rstrip("/")
+    central_only = os.getenv("CIPHERCHAT_CENTRAL_ONLY") == "1"
+    if central_only:
+        if not path.startswith("/api/"):
+            return JSONResponse({"detail": "not found"}, status_code=404)
+        expected = os.getenv("CIPHERCHAT_PROXY_SECRET", "")
+        supplied = request.headers.get("x-cipherchat-proxy-secret", "")
+        if len(expected) < 32 or not hmac.compare_digest(supplied, expected):
+            return JSONResponse({"detail": "proxy authorization required"}, status_code=403)
+    if upstream and path.startswith("/api/"):
+        origin = request.headers.get("origin")
+        host = request.headers.get("host")
+        if origin and origin not in {f"http://{host}", f"https://{host}"}:
+            return JSONResponse({"detail": "cross-origin request rejected"}, status_code=403)
+        parsed = urlparse(upstream)
+        if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password:
+            return JSONResponse({"detail": "invalid HTTPS API upstream configuration"}, status_code=503)
+        proxy_secret = os.getenv("CIPHERCHAT_PROXY_SECRET", "")
+        if len(proxy_secret) < 32:
+            return JSONResponse({"detail": "proxy secret is not configured"}, status_code=503)
+        query = f"?{request.url.query}" if request.url.query else ""
+        headers = {name: value for name, value in request.headers.items()
+                   if name.lower() in {"accept", "content-type", "cookie", "user-agent"}}
+        headers["x-cipherchat-proxy-secret"] = proxy_secret
+        try:
+            async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
+                result = await client.request(request.method, upstream + path + query,
+                                              content=await request.body(), headers=headers)
+        except httpx.RequestError:
+            return JSONResponse({"detail": "Alice's backend is unavailable"}, status_code=502)
+        outgoing = {name: value for name, value in result.headers.items()
+                    if name.lower() in {"content-type", "set-cookie", "cache-control"}}
+        return Response(content=result.content, status_code=result.status_code, headers=outgoing)
+    return await call_next(request)
+
+
 @lru_cache(maxsize=1)
 def _database() -> Database:
     database = Database(Config.from_env())
@@ -114,8 +157,10 @@ def index():
 async def login(request: Request):
     _same_origin(request)
     data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(400, "request must be an object")
     username = data.get("username", "")
-    if username not in USERS or not hmac.compare_digest(str(data.get("password", "")), _password(username)):
+    if not isinstance(username, str) or username not in USERS or not hmac.compare_digest(str(data.get("password", "")), _password(username)):
         raise HTTPException(401, "invalid credentials")
     token = _token(username)
     if not _db(request).claim_session(username, _token_hash(token)):
@@ -163,6 +208,8 @@ async def register(request: Request):
     db = _db(request)
     _check(db)
     data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(400, "request must be an object")
     try:
         exchange = bytes.fromhex(data["exchange_public"])
         signing = bytes.fromhex(data["signing_public"])
@@ -213,14 +260,15 @@ def mallory_audit(request: Request):
 
 
 def _classify(error: str) -> str:
-    if "signature" in error or "ciphertext" in error or "schema" in error:
+    if "signature" in error or "ciphertext" in error or "schema" in error or "base64" in error:
         return "TAMPERING"
     if "timestamp" in error:
         return "TIMESTAMP_REJECTED"
     return "INVALID_MESSAGE"
 
 
-def _submit(db: Database, actor: str, envelope: dict, simulated: bool = False) -> dict:
+def _submit(db: Database, actor: str, envelope: dict, simulated: bool = False,
+            verification_time: datetime | None = None) -> dict:
     try:
         _check(db)
         state = db.chat_state()
@@ -240,6 +288,7 @@ def _submit(db: Database, actor: str, envelope: dict, simulated: bool = False) -
             return {"accepted": False, "reason": "sender key not registered", "event_type": "AUTHENTICATION_FAILURE"}
         try:
             validate_envelope(envelope, bytes.fromhex(keys["signing_public"]),
+                              now=verification_time,
                               window_seconds=int(os.getenv("CIPHERCHAT_TIMESTAMP_WINDOW_SECONDS", "300")))
             if envelope["session_id"] != state["session_id"]:
                 raise EnvelopeError("session changed; refresh chat")
@@ -272,6 +321,8 @@ async def send(request: Request):
     if username == "mallory":
         raise HTTPException(403, "Mallory cannot send chat messages")
     data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(400, "request must be an object")
     return _submit(_db(request), username, data.get("envelope"))
 
 
@@ -280,6 +331,8 @@ async def delivered(request: Request):
     _same_origin(request)
     username = _http_user(request)
     data = await request.json()
+    if not isinstance(data, dict) or not isinstance(data.get("message_id"), str):
+        raise HTTPException(400, "message_id must be a string")
     db = _db(request)
     _check(db)
     row = db.message(data.get("message_id", ""))
@@ -313,6 +366,8 @@ async def mallory_attack(request: Request):
     db = _db(request)
     _check(db)
     data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(400, "request must be an object")
     attack = data.get("attack")
     if attack == "delete_record":
         if os.getenv("CIPHERCHAT_ENABLE_DESTRUCTIVE_DEMO") != "1":
@@ -332,7 +387,13 @@ async def mallory_attack(request: Request):
                     "audit_valid": False, "chat_blocked": True, "reason": str(error)}
         raise HTTPException(500, "deletion unexpectedly left the chain valid")
     if attack == "eavesdrop":
-        captured = db.captured()
+        source_id = data.get("message_id")
+        if source_id is not None and not isinstance(source_id, str):
+            raise HTTPException(400, "message_id must be a string")
+        selected = db.message(source_id) if source_id is not None else None
+        if source_id is not None and selected is None:
+            raise HTTPException(404, "captured message not found")
+        captured = db.captured() if selected is None else [selected]
         if not captured:
             raise HTTPException(404, "no captured message")
         envelope = captured[0]["envelope"]
@@ -385,5 +446,9 @@ async def mallory_attack(request: Request):
         # Mallory has no Alice credentials, so use the normal actor binding.
     elif attack not in {"replay", "stale"}:
         raise HTTPException(400, "unknown attack")
-    result = _submit(db, "mallory", modified, simulated=attack != "impersonate")
+    verification_time = None
+    if attack == "stale":
+        sent_at = datetime.fromisoformat(original["timestamp"].replace("Z", "+00:00"))
+        verification_time = sent_at + timedelta(seconds=int(os.getenv("CIPHERCHAT_TIMESTAMP_WINDOW_SECONDS", "300")) + 1)
+    result = _submit(db, "mallory", modified, simulated=attack != "impersonate", verification_time=verification_time)
     return {"attack": attack, "original": original, "submitted": modified, **result}

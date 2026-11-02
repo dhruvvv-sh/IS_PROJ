@@ -16,9 +16,9 @@ from cipherchat.realtime.protocol import EnvelopeError, aad, signing_bytes, vali
 from cipherchat.realtime import server
 
 
-def envelope_for(alice, bob, sequence=1, timestamp=None, plaintext=b"hello", session_id="alice-bob:1"):
+def envelope_for(alice, bob, sequence=1, timestamp=None, plaintext=b"hello", session_id="alice-bob:1", sender="alice"):
     item = {"protocol_version": 3, "session_id": session_id, "conversation_id": "alice-bob",
-            "sender_id": "alice", "receiver_id": "bob", "message_id": str(uuid4()),
+            "sender_id": sender, "receiver_id": "bob" if sender == "alice" else "alice", "message_id": str(uuid4()),
             "sequence_number": sequence,
             "timestamp": (timestamp or datetime.now(timezone.utc)).isoformat(timespec="milliseconds")}
     key = derive_session_key(derive_shared_secret(alice.private_key, bob.public_key),
@@ -27,7 +27,7 @@ def envelope_for(alice, bob, sequence=1, timestamp=None, plaintext=b"hello", ses
     ciphertext = AESGCM(key).encrypt(nonce, plaintext, aad(item))
     item["nonce"] = base64.b64encode(nonce).decode()
     item["ciphertext"] = base64.b64encode(ciphertext).decode()
-    item["signature"] = base64.b64encode(alice.signing_private_key.sign(signing_bytes(item))).decode()
+    item["signature"] = base64.b64encode((alice if sender == "alice" else bob).signing_private_key.sign(signing_bytes(item))).decode()
     return item
 
 
@@ -196,7 +196,7 @@ def test_authenticated_http_replay_tamper_impersonation_and_rekey(monkeypatch):
         assert database.saved[item["message_id"]]["delivery_status"] == "DELIVERED"
         assert client.post("/api/mallory/attack", cookies=cookies["mallory"], json={"attack": "eavesdrop"}).json()["wrong_key_rejected"]
         assert client.post("/api/mallory/attack", cookies=cookies["mallory"], json={"attack": "key_substitution"}).json()["accepted"] is False
-        for attack, expected in (("replay", "REPLAY"), ("tamper", "TAMPERING"), ("impersonate", "IMPERSONATION"), ("stale", "INVALID_MESSAGE")):
+        for attack, expected in (("replay", "REPLAY"), ("tamper", "TAMPERING"), ("impersonate", "IMPERSONATION"), ("stale", "TIMESTAMP_REJECTED")):
             if database.chat_state()["blocked"]:
                 assert client.post("/api/rekey", cookies=cookies["alice"]).json()["chat"]["blocked"] is False
             response = client.post("/api/mallory/attack", cookies=cookies["mallory"], json={"attack": attack, "message_id": item["message_id"]})

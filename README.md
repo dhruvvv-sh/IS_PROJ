@@ -26,6 +26,8 @@ material is included in that log.
 See [UI_OBSERVATION_GUIDE.md](UI_OBSERVATION_GUIDE.md) for the local
 cryptographic observation interface and its demonstration-mode boundaries.
 See [VERCEL_SETUP.md](VERCEL_SETUP.md) for the HTTP attack laboratory and deployment.
+For the three-computer demo with Alice's MacBook hosting MySQL and the API,
+see [CENTRAL_PC_SETUP.md](CENTRAL_PC_SETUP.md).
 
 ## Three-role HTTP laboratory
 

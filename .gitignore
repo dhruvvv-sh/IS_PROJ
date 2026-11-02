@@ -5,6 +5,7 @@ __pycache__/
 .env
 .env.lan
 .env.production
+.env.central
 .lan-certs/
 .vscode/
 *.checkpoint.json
