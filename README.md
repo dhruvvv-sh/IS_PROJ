@@ -29,6 +29,10 @@ cryptographic observation interface and its demonstration-mode boundaries.
 For Alice, Bob, and Eva on separate laptops, follow
 [MULTITERMINAL_GUIDE.md](MULTITERMINAL_GUIDE.md).
 
+For the reproducible CipherChat/Matrix Olm performance comparison, see
+[benchmarks/results/REPORT.md](benchmarks/results/REPORT.md) and
+[benchmarks/run.py](benchmarks/run.py).
+
 ## Design
 
 The cryptographic path is **X25519 ECDH → HKDF-SHA-256 → AES-256-GCM →
