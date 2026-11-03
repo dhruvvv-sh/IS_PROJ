@@ -48,9 +48,17 @@ Setup includes different steps for each protocol and is not directly equivalent.
 
 ## Charts
 
+![Encryption and decryption comparison](encryption_decryption_comparison.svg)
+
+A PNG copy is also exported on macOS for slide editors.
+
+![Benchmark measurement flow](benchmark_method.svg)
+
 ![Round-trip latency](roundtrip_latency.svg)
 
 ![Wire overhead](wire_overhead.svg)
+
+For slide-by-slide definitions, speaker notes, and interpretation, see [PRESENTATION_GUIDE.md](PRESENTATION_GUIDE.md).
 
 ## Limitations
 

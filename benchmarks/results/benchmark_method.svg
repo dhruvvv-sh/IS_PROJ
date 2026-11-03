@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1320" height="300" viewBox="0 0 1320 300" role="img" aria-labelledby="title desc">
+<title id="title">CipherChat benchmark measurement flow</title>
+<desc id="desc">Payload sizes enter a warm session, then encrypt and serialize, parse and decrypt, verify plaintext and summarize timings. Network and UI are excluded.</desc>
+<rect width="1320" height="300" fill="white"/>
+<text x="42" y="43" font-family="Arial,sans-serif" font-size="27" font-weight="700" fill="#15243a">What the benchmark measures</text>
+<rect x="42" y="89" width="220" height="112" rx="12" fill="#f0f5fb" stroke="#9eb7d2"/>
+<text x="56" y="125" font-family="Arial,sans-serif" font-size="17" font-weight="700" fill="#15243a">Choose payload</text>
+<text x="56" y="158" font-family="Arial,sans-serif" font-size="14" fill="#385a76">32 B · 1 KiB · 16 KiB</text>
+<line x1="264" y1="145" x2="287" y2="145" stroke="#2766b0" stroke-width="3"/>
+<polygon points="287,139 294,145 287,151" fill="#2766b0"/>
+<rect x="294" y="89" width="220" height="112" rx="12" fill="#f0f5fb" stroke="#9eb7d2"/>
+<text x="308" y="125" font-family="Arial,sans-serif" font-size="17" font-weight="700" fill="#15243a">Warm the session</text>
+<text x="308" y="158" font-family="Arial,sans-serif" font-size="14" fill="#385a76">50 messages / round</text>
+<line x1="516" y1="145" x2="539" y2="145" stroke="#2766b0" stroke-width="3"/>
+<polygon points="539,139 546,145 539,151" fill="#2766b0"/>
+<rect x="546" y="89" width="220" height="112" rx="12" fill="#f0f5fb" stroke="#9eb7d2"/>
+<text x="560" y="125" font-family="Arial,sans-serif" font-size="17" font-weight="700" fill="#15243a">Time send side</text>
+<text x="560" y="158" font-family="Arial,sans-serif" font-size="14" fill="#385a76">encrypt + serialize</text>
+<line x1="768" y1="145" x2="791" y2="145" stroke="#2766b0" stroke-width="3"/>
+<polygon points="791,139 798,145 791,151" fill="#2766b0"/>
+<rect x="798" y="89" width="220" height="112" rx="12" fill="#f0f5fb" stroke="#9eb7d2"/>
+<text x="812" y="125" font-family="Arial,sans-serif" font-size="17" font-weight="700" fill="#15243a">Time receive side</text>
+<text x="812" y="158" font-family="Arial,sans-serif" font-size="14" fill="#385a76">parse + decrypt</text>
+<line x1="1020" y1="145" x2="1043" y2="145" stroke="#2766b0" stroke-width="3"/>
+<polygon points="1043,139 1050,145 1043,151" fill="#2766b0"/>
+<rect x="1050" y="89" width="220" height="112" rx="12" fill="#f0f5fb" stroke="#9eb7d2"/>
+<text x="1064" y="125" font-family="Arial,sans-serif" font-size="17" font-weight="700" fill="#15243a">Check &amp; summarize</text>
+<text x="1064" y="158" font-family="Arial,sans-serif" font-size="14" fill="#385a76">match bytes · median · p95</text>
+<text x="42" y="252" font-family="Arial,sans-serif" font-size="17" fill="#53657d">5 rounds × 300 timed messages per system and size; throughput uses a separate batch.</text>
+<text x="42" y="280" font-family="Arial,sans-serif" font-size="17" fill="#9a3e32">No network, browser, relay, or disk I/O in the timed message path.</text>
+</svg>
