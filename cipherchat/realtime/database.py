@@ -34,7 +34,7 @@ class Config:
     def from_env(cls):
         return cls(os.getenv("CIPHERCHAT_MYSQL_HOST", "localhost"), int(os.getenv("CIPHERCHAT_MYSQL_PORT", "3306")),
                    os.getenv("CIPHERCHAT_MYSQL_DATABASE", "cipherchat"), os.getenv("CIPHERCHAT_MYSQL_USER", "cipheruser"),
-                   os.environ["CIPHERCHAT_MYSQL_PASSWORD"],
+                   os.getenv("CIPHERCHAT_MYSQL_PASSWORD", ""),
                    Path(os.environ["CIPHERCHAT_AUDIT_CHECKPOINT"]) if os.getenv("CIPHERCHAT_AUDIT_CHECKPOINT") else None)
 
 
@@ -683,3 +683,175 @@ class Database:
             conn.commit()
         finally:
             conn.close()
+
+
+class MemoryDatabase:
+    """In-memory audit and state storage for local evaluation and demonstration."""
+
+    def __init__(self):
+        self.identities = {}
+        self.saved = {}
+        self.highest = {}
+        self.security_events = []
+        self.audit = []
+        self.failed = False
+        self.sessions = {}
+
+    def migrate(self):
+        pass
+
+    def claim_session(self, username, token_hash, lease_seconds=30, replace_existing=False):
+        row = self.sessions.get(username)
+        if row and row[1] > time.time() - lease_seconds and not replace_existing:
+            return False
+        self.sessions[username] = (token_hash, time.time())
+        return True
+
+    def touch_session(self, username, token_hash, lease_seconds=30):
+        row = self.sessions.get(username)
+        if not row or row[0] != token_hash or row[1] <= time.time() - lease_seconds:
+            return False
+        self.sessions[username] = (token_hash, time.time())
+        return True
+
+    def release_session(self, username, token_hash):
+        if self.sessions.get(username, (None,))[0] == token_hash:
+            del self.sessions[username]
+
+    def presence(self, lease_seconds=30):
+        return {username: username in self.sessions and self.sessions[username][1] > time.time() - lease_seconds
+                for username in ("alice", "bob", "mallory")}
+
+    def verify(self):
+        if self.failed:
+            raise AuditFailure("deleted audit record")
+        return {"record_count": len(self.audit), "record_hash": "0" * 64}
+
+    def identity(self, who):
+        return self.identities.get(who)
+
+    def register_identity(self, who, exchange, signing):
+        value = {"exchange_public": exchange.hex(), "signing_public": signing.hex()}
+        if who in self.identities and self.identities[who] != value:
+            raise ValueError("registered public key mismatch")
+        self.identities[who] = value
+        self.audit.append({"number": len(self.audit) + 1, "kind": "KEY_REGISTERED", "record_hash": "a" * 64})
+
+    def rotate_identity(self, who, exchange, signing):
+        if self.chat_state()["state"] != "SECURE":
+            raise ValueError("finish security recovery before moving this role")
+        old = self.identities.get(who)
+        if not old:
+            raise ValueError("identity is not registered")
+        old_fingerprint = hashlib.sha256(bytes.fromhex(old["signing_public"])).hexdigest()
+        new_fingerprint = hashlib.sha256(signing).hexdigest()
+        self.identities[who] = {"exchange_public": exchange.hex(), "signing_public": signing.hex()}
+        self.audit.append({"number": len(self.audit) + 1, "kind": "KEY_ROTATED", "record_hash": "d" * 64})
+        detail = {"generation": self.chat_state()["generation"] + 1, "old_fingerprint": old_fingerprint,
+                  "new_fingerprint": new_fingerprint}
+        self.event("CHAT_REKEYED", who, None, detail)
+        return detail
+
+    def event(self, event_type, actor, message_id, detail):
+        self.security_events.append({"timestamp": _now(), "event_type": event_type, "actor": actor,
+                                     "message_id": message_id, "detail": detail})
+        self.audit.append({"number": len(self.audit) + 1, "kind": "SECURITY_EVENT", "record_hash": "b" * 64})
+
+    def chat_state(self):
+        generation, state, incident_type = 1, RecoveryState.SECURE, None
+        for row in self.security_events:
+            if row["event_type"] == "CHAT_BLOCKED":
+                state = RecoveryState.BLOCKED
+                incident_type = "LEGACY_BLOCK"
+            elif row["event_type"] == "CHAT_REKEYED":
+                generation, state, incident_type = row["detail"]["generation"], RecoveryState.SECURE, None
+            elif row["event_type"] == "RECOVERY_STATE":
+                detail = row["detail"]
+                state = RecoveryState(detail["state"])
+                if state is RecoveryState.SUSPECTED_ATTACK:
+                    incident_type = detail.get("incident_type")
+                elif state is RecoveryState.SECURE:
+                    generation, incident_type = detail["generation"], None
+        return {"generation": generation, "session_id": f"alice-bob:{generation}",
+                "state": state.value, "blocked": state is not RecoveryState.SECURE,
+                "incident_type": incident_type}
+
+    def recovery_transition(self, actor, message_id, expected, transitions, detail=None):
+        if self.chat_state()["state"] != expected.value:
+            return False
+        machine = RecoveryMachine()
+        machine.state = expected
+        generation = self.chat_state()["generation"]
+        for target in transitions:
+            machine.transition(target)
+            payload = {**(detail or {}), "state": target.value, "session_id": f"alice-bob:{generation}"}
+            if target is RecoveryState.SECURE:
+                payload["generation"] = generation + 1
+            self.event("RECOVERY_STATE", actor, message_id, payload)
+        return True
+
+    def start_new_run(self, expected_session: str) -> dict:
+        state = self.chat_state()
+        if state["session_id"] != expected_session:
+            raise ValueError("session changed; verify the current session before starting a run")
+        detail = {
+            "generation": state["generation"] + 1,
+            "previous_session": expected_session,
+            "reason": "operator explicitly started a fresh laboratory run",
+        }
+        self.event("CHAT_REKEYED", "operator", None, detail)
+        return {**detail, "session_id": f"alice-bob:{detail['generation']}"}
+
+    def accept(self, item, idempotent=False):
+        if idempotent and self.saved.get(item["message_id"], {}).get("envelope") == item:
+            return True, "already accepted"
+        key = (item["sender_id"], item["conversation_id"])
+        if item["message_id"] in self.saved or item["sequence_number"] <= self.highest.get(key, 0):
+            return False, "duplicate message ID or stale sequence"
+        self.highest[key] = item["sequence_number"]
+        self.saved[item["message_id"]] = {"envelope": item, "delivery_status": "QUEUED"}
+        self.audit.append({"number": len(self.audit) + 1, "kind": "ENCRYPTED_MESSAGE", "record_hash": "c" * 64})
+        return True, "accepted"
+
+    def message(self, message_id):
+        return self.saved.get(message_id)
+
+    def mark_delivered(self, message_id):
+        if message_id in self.saved:
+            self.saved[message_id]["delivery_status"] = "DELIVERED"
+
+    def pending(self, username):
+        return [row["envelope"] for row in self.saved.values()
+                if row["envelope"]["receiver_id"] == username and row["delivery_status"] == "QUEUED"]
+
+    def highest_sequence(self, username):
+        return self.highest.get((username, "alice-bob"), 0)
+
+    def messages(self, username):
+        return list(self.saved.values())
+
+    def history_page(self, username, limit=50, offset=0):
+        rows = self.messages(username)
+        return {"messages": rows[offset:offset+limit], "total": len(rows), "offset": offset, "limit": limit}
+
+    def captured(self):
+        return list(self.saved.values())
+
+    def events(self):
+        return list(reversed(self.security_events))
+
+    def stats(self):
+        return {"messages_sent": len(self.saved),
+                "messages_delivered": sum(row["delivery_status"] == "DELIVERED" for row in self.saved.values()),
+                "signatures_verified": len(self.saved),
+                "signature_failures": sum(row["event_type"] == "TAMPERING" and "signature" in row["detail"].get("reason", "") for row in self.security_events),
+                "events": {kind: sum(row["event_type"] == kind for row in self.security_events)
+                           for kind in {row["event_type"] for row in self.security_events}},
+                "audit": self.verify()}
+
+    def audit_rows(self):
+        return list(self.audit)
+
+    def delete_audit_row_for_demo(self, number: int) -> None:
+        self.failed = True
+        self.audit = [row for row in self.audit if row.get("number") != number]

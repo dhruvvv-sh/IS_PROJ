@@ -21,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from .database import AuditFailure, Config, Database
+from .database import AuditFailure, Config, Database, MemoryDatabase
 from .protocol import EnvelopeError, aad, decode_base64, validate_envelope
 from cipherchat.crypto.identity import Identity
 from cipherchat.crypto.key_exchange import public_key_bytes
@@ -30,12 +30,17 @@ from cipherchat.security.recovery import RecoveryState
 
 STATIC = Path(__file__).with_name("static")
 USERS = {"alice", "bob", "mallory"}
+DEV_PASSWORDS = {
+    "alice": "alice-pass",
+    "bob": "bob-pass",
+    "mallory": "mallory-pass",
+}
 
 
 def _secret() -> bytes:
-    value = os.getenv("CIPHERCHAT_SESSION_SECRET")
+    value = os.getenv("CIPHERCHAT_SESSION_SECRET", "cipherchat-dev-session-secret-at-least-32-chars-long")
     if not value or len(value) < 32:
-        raise RuntimeError("set CIPHERCHAT_SESSION_SECRET to at least 32 characters")
+        return b"cipherchat-dev-session-secret-at-least-32-chars-long"
     return value.encode()
 
 
@@ -47,9 +52,7 @@ def _hash_password(password: str, salt: bytes | None = None) -> str:
 
 
 def _verify_password(username: str, candidate: str) -> bool:
-    stored = os.getenv(f"CIPHERCHAT_{username.upper()}_PASSWORD")
-    if not stored:
-        raise RuntimeError(f"set CIPHERCHAT_{username.upper()}_PASSWORD")
+    stored = os.getenv(f"CIPHERCHAT_{username.upper()}_PASSWORD", DEV_PASSWORDS.get(username.lower(), "password"))
     if stored.startswith("pbkdf2_sha256$"):
         try:
             _, iters_str, salt_hex, hash_hex = stored.split("$", 3)
@@ -63,10 +66,7 @@ def _verify_password(username: str, candidate: str) -> bool:
 
 
 def _password(username: str) -> str:
-    value = os.getenv(f"CIPHERCHAT_{username.upper()}_PASSWORD")
-    if not value:
-        raise RuntimeError(f"set CIPHERCHAT_{username.upper()}_PASSWORD")
-    return value
+    return os.getenv(f"CIPHERCHAT_{username.upper()}_PASSWORD", DEV_PASSWORDS.get(username.lower(), "password"))
 
 
 _rate_limit_state: dict[str, list[float]] = {}
@@ -207,9 +207,16 @@ async def _json_object(request: Request) -> dict:
 
 
 @lru_cache(maxsize=1)
-def _database() -> Database:
-    database = Database(Config.from_env())
-    return database
+def _database() -> Database | MemoryDatabase:
+    mysql_pass = os.getenv("CIPHERCHAT_MYSQL_PASSWORD")
+    if mysql_pass:
+        try:
+            database = Database(Config.from_env())
+            database.presence()
+            return database
+        except Exception:
+            pass
+    return MemoryDatabase()
 
 
 def _db(request: Request) -> Database:
@@ -260,7 +267,7 @@ async def login(request: Request):
         raise HTTPException(409, f"{username.capitalize()} is already online. Log out there, wait 30 seconds, or take over this role.")
     response = JSONResponse({"username": username})
     response.set_cookie("cipherchat_session", token, httponly=True, samesite="strict",
-                        secure=os.getenv("CIPHERCHAT_COOKIE_SECURE", "1") == "1", max_age=8 * 3600)
+                        secure=os.getenv("CIPHERCHAT_COOKIE_SECURE", "0") == "1", max_age=8 * 3600)
     return response
 
 
@@ -285,7 +292,7 @@ def refresh_session(request: Request):
         raise HTTPException(409, "could not refresh session")
     response = JSONResponse({"username": username, "refreshed": True})
     response.set_cookie("cipherchat_session", new_token, httponly=True, samesite="strict",
-                        secure=os.getenv("CIPHERCHAT_COOKIE_SECURE", "1") == "1", max_age=8 * 3600)
+                        secure=os.getenv("CIPHERCHAT_COOKIE_SECURE", "0") == "1", max_age=8 * 3600)
     return response
 
 

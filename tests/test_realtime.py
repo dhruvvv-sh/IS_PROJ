@@ -154,6 +154,18 @@ class MemoryDatabase:
             self.event("RECOVERY_STATE", actor, message_id, payload)
         return True
 
+    def start_new_run(self, expected_session: str) -> dict:
+        state = self.chat_state()
+        if state["session_id"] != expected_session:
+            raise ValueError("session changed; verify the current session before starting a run")
+        detail = {
+            "generation": state["generation"] + 1,
+            "previous_session": expected_session,
+            "reason": "operator explicitly started a fresh laboratory run",
+        }
+        self.event("CHAT_REKEYED", "operator", None, detail)
+        return {**detail, "session_id": f"alice-bob:{detail['generation']}"}
+
     def accept(self, item, idempotent=False):
         if idempotent and self.saved.get(item["message_id"], {}).get("envelope") == item:
             return True, "already accepted"
