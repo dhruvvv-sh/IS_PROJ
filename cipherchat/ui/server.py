@@ -24,8 +24,10 @@ from cipherchat.protocol.limits import (
     MAX_PLAINTEXT_SIZE,
 )
 from cipherchat.protocol.messages import ProtocolError
-from cipherchat.protocol.session import SessionManager
+from cipherchat.protocol.session import SessionManager, rekey_pair
+from cipherchat.security.attacks import AttackType
 from cipherchat.security.evidence import EvidenceLog, verify_evidence_chain
+from cipherchat.security.recovery import RecoveryMachine, RecoveryState
 from cipherchat.security.simulator import AttackSimulator
 
 STATIC_DIR = Path(__file__).with_name("static")
@@ -67,7 +69,9 @@ class DemonstrationController:
         self.events: list[ObservationEvent] = []
         self.deliveries: list[dict[str, object]] = []
         self.attacks: list[dict[str, object]] = []
+        self.pending_attack_index: int | None = None
         self.evidence = EvidenceLog()
+        self.recovery = RecoveryMachine()
         self.establish()
 
     def establish(self) -> dict[str, object]:
@@ -77,7 +81,9 @@ class DemonstrationController:
         self.session_id = str(uuid4())
         self.deliveries = []
         self.attacks = []
+        self.pending_attack_index = None
         self.evidence = EvidenceLog()
+        self.recovery = RecoveryMachine()
         context = b"cipherchat-ui-demo:" + self.session_id.encode()
         self.alice_sessions.establish(public_key_bytes(self.bob.public_key), self.bob.signing_public_key_bytes, session_id=self.session_id, context=context)
         self.bob_sessions.establish(public_key_bytes(self.alice.public_key), self.alice.signing_public_key_bytes, session_id=self.session_id, context=context)
@@ -104,6 +110,8 @@ class DemonstrationController:
         checkpoint = self.evidence.checkpoint()
         return {
             "demonstration_mode": True,
+            "recovery": {"state": self.recovery.state.value,
+                         "history": [state.value for state in self.recovery.history]},
             "session": {
                 "session_id": self.session_id, "key_exchange": "X25519", "kdf": "HKDF-SHA-256",
                 "encryption": "AES-256-GCM", "session_key": sender.key.hex() if sender else None,
@@ -131,6 +139,8 @@ class DemonstrationController:
             "format": "cipherchat-demonstration-logs-v1",
             "exported_at": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
             "session_id": self.session_id,
+            "recovery": {"state": self.recovery.state.value,
+                         "history": [state.value for state in self.recovery.history]},
             "system_limits": {
                 "max_plaintext_size": MAX_PLAINTEXT_SIZE,
                 "max_ciphertext_size": MAX_CIPHERTEXT_SIZE,
@@ -154,6 +164,8 @@ class DemonstrationController:
         }
 
     def send(self, plaintext: str, sender_id: str = "alice") -> dict[str, object]:
+        if self.recovery.state is not RecoveryState.SECURE:
+            raise ValueError(f"chat is {self.recovery.state.value.lower()}; sending is disabled")
         if not isinstance(plaintext, str) or not plaintext.strip():
             raise ValueError("message must not be empty")
         encoded_pt = plaintext.encode("utf-8")
@@ -201,6 +213,10 @@ class DemonstrationController:
     def attack(self, name: str) -> dict[str, object]:
         if not isinstance(name, str) or len(name) > MAX_ID_LENGTH:
             raise ValueError("unsupported attack")
+        if name == "delete_evidence":
+            return self._simulate_evidence_deletion()
+        if self.recovery.state is not RecoveryState.SECURE:
+            raise ValueError(f"chat is {self.recovery.state.value.lower()}; recover or start a new session first")
         simulator = AttackSimulator()
         if name == "replay": result = simulator.simulate_replay()
         elif name == "key_substitution": result = simulator.simulate_key_substitution()
@@ -212,32 +228,147 @@ class DemonstrationController:
         else:
             raise ValueError("unsupported attack")
         evidence_record = self.evidence.record(
-            session_id=result.session_id,
+            session_id=self.session_id,
             attack_type=result.classification,
             description=f"Controlled UI test rejected {result.attack_type.value}: {result.detail}",
             message_id=result.message_id,
             sequence_number=result.sequence_number,
         )
         checkpoint = self.evidence.checkpoint()
+        if result.detected:
+            self.recovery.report_violation()
+            assert self.alice_sessions and self.bob_sessions
+            self.alice_sessions.invalidate()
+            self.bob_sessions.invalidate()
+            if result.classification is AttackType.KEY_SUBSTITUTION:
+                self.recovery.begin_verification()
+                self.recovery.verification_failed()
         result_data = {
             "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
             "attack_type": result.attack_type.value, "classification": result.classification.value,
-            "detected": result.detected, "session_id": result.session_id, "message_id": result.message_id,
+            "detected": result.detected, "session_id": self.session_id, "simulator_session_id": result.session_id,
+            "message_id": result.message_id,
             "sequence_number": result.sequence_number, "evidence_generated": result.evidence_generated,
             "evidence_hash": evidence_record.evidence_hash,
             "simulator_evidence_hash": result.evidence_hash,
             "checkpoint_valid": verify_evidence_chain(self.evidence.records, checkpoint),
-            "recovery_state": result.recovery_state.value, "recovery_history": [state.value for state in result.recovery_history],
-            "rekeyed": result.rekeyed, "old_session_invalidated": result.old_session_invalidated,
+            "recovery_state": self.recovery.state.value, "recovery_history": [state.value for state in self.recovery.history],
+            "rekeyed": False, "old_session_invalidated": result.detected,
+            "simulator_recovery_state": result.recovery_state.value,
             "detail": result.detail,
         }
         self.attacks.append(result_data)
+        if self.recovery.state is RecoveryState.QUARANTINED:
+            self.pending_attack_index = len(self.attacks) - 1
         self.events.extend([
             _event("ATTACK", "12", "ATTACKER INTERCEPTED", {"attack": result.attack_type.value, "detail": result.detail, "message_id": result.message_id, "sequence_number": result.sequence_number}, "A controlled local attack scenario ran through the existing backend simulator."),
             _event("VALIDATION", "13", "SECURITY VIOLATION DETECTED", {"classification": result.classification.value, "detected": result.detected}, "The displayed classification is produced by the protocol's actual failure path."),
             _event("EVIDENCE", "14", "INCIDENT EVIDENCE GENERATED", {"incident_id": evidence_record.incident_id, "evidence_hash": evidence_record.evidence_hash, "previous_evidence_hash": evidence_record.previous_evidence_hash, "checkpoint_valid": verify_evidence_chain(self.evidence.records, checkpoint), "session_id": result.session_id, "message_id": result.message_id, "sequence_number": result.sequence_number}, "The controller appended a real hash-chained incident record and verified the complete chain against its checkpoint."),
-            _event("RECOVERY", "15", "RECOVERY STATE TRANSITIONS", {"history": [state.value for state in result.recovery_history], "current_state": result.recovery_state.value}, "The existing bounded recovery state machine determined the next state."),
-            _event("REKEY", "16", "REKEY OR BLOCK RESULT", {"rekeyed": result.rekeyed, "old_session_invalidated": result.old_session_invalidated, "new_session_active": result.recovered, "state": result.recovery_state.value}, "Recoverable scenarios install a new session; key substitution remains blocked."),
+            _event("RECOVERY", "15", "RECOVERY STATE TRANSITIONS", {"history": [state.value for state in self.recovery.history], "current_state": self.recovery.state.value}, "The live chat entered quarantine; a failed key substitution blocks it."),
+            _event("SESSION", "16", "CHAT SENDING DISABLED", {"state": self.recovery.state.value, "old_session_invalidated": result.detected}, "Alice and Bob cannot send on the invalidated session."),
+        ])
+        return {**self.snapshot(), "attack": result_data}
+
+    def recover(self) -> dict[str, object]:
+        if self.recovery.state is not RecoveryState.QUARANTINED:
+            raise ValueError("only a quarantined chat can be verified and rekeyed")
+        assert self.alice and self.bob and self.alice_sessions and self.bob_sessions
+        old_session_id = self.session_id
+        old_key = self.alice_sessions.sender.key if self.alice_sessions.sender else None
+        self.recovery.begin_verification()
+        self.recovery.verification_succeeded()
+        new_session_id = str(uuid4())
+        context = b"cipherchat-ui-rekey:" + new_session_id.encode()
+        old_alice_exchange_public_key = self.alice_sessions.info.local_exchange_public_key
+        old_bob_exchange_public_key = self.bob_sessions.info.local_exchange_public_key
+        rekey_pair(self.alice_sessions, self.bob_sessions, session_id=new_session_id, context=context)
+        self.session_id = new_session_id
+        self.recovery.rekey_complete()
+        assert self.alice_sessions.sender
+        rekey_data = {
+            "old_session_id": old_session_id, "new_session_id": new_session_id,
+            "key_changed": self.alice_sessions.sender.key != old_key,
+            "fresh_x25519": (
+                self.alice_sessions.info.local_exchange_public_key != old_alice_exchange_public_key
+                and self.bob_sessions.info.local_exchange_public_key != old_bob_exchange_public_key
+            ),
+            "alice_exchange_public_key": self.alice_sessions.info.local_exchange_public_key.hex(),
+            "bob_exchange_public_key": self.bob_sessions.info.local_exchange_public_key.hex(),
+            "state": self.recovery.state.value,
+        }
+        if self.pending_attack_index is not None:
+            self.attacks[self.pending_attack_index].update({
+                "rekeyed": True, "recovery_state": self.recovery.state.value,
+                "recovery_history": [state.value for state in self.recovery.history],
+                "new_session_id": new_session_id,
+            })
+            self.pending_attack_index = None
+        self.events.append(_event("REKEY", "16", "LIVE CHAT REKEYED", rekey_data,
+                                  "Both chat directions now use a new session ID and derived key; sending is enabled."))
+        return {**self.snapshot(), "rekey": rekey_data}
+
+    def _simulate_evidence_deletion(self) -> dict[str, object]:
+        if not self.evidence.records:
+            raise ValueError("Run a message attack first to create an evidence record")
+        checkpoint = self.evidence.checkpoint()
+        removed = self.evidence.records[-1]
+        altered_copy = self.evidence.records[:-1]
+        detected = not verify_evidence_chain(altered_copy, checkpoint)
+        if detected:
+            if self.recovery.state is RecoveryState.SECURE:
+                self.recovery.report_violation()
+            if self.recovery.state is RecoveryState.QUARANTINED:
+                self.recovery.begin_verification()
+                self.recovery.verification_failed()
+            assert self.alice_sessions and self.bob_sessions
+            self.alice_sessions.invalidate()
+            self.bob_sessions.invalidate()
+            self.pending_attack_index = None
+        record = self.evidence.record(
+            session_id=self.session_id,
+            attack_type=AttackType.TAMPERING,
+            description="Controlled deletion of an evidence record from an isolated copy; trusted checkpoint rejected the copy",
+            message_id=removed.message_id,
+            sequence_number=removed.sequence_number,
+        )
+        result_data = {
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+            "attack_type": "EVIDENCE_DELETION", "classification": "EVIDENCE_TAMPERING",
+            "detected": detected, "session_id": self.session_id,
+            "message_id": removed.message_id, "sequence_number": removed.sequence_number,
+            "evidence_generated": True, "evidence_hash": record.evidence_hash,
+            "checkpoint_valid": verify_evidence_chain(self.evidence.records, self.evidence.checkpoint()),
+            "altered_copy_valid": not detected,
+            "original_record_count": checkpoint.record_count,
+            "altered_copy_count": len(altered_copy),
+            "removed_incident_id": removed.incident_id,
+            "recovery_state": self.recovery.state.value,
+            "recovery_history": [state.value for state in self.recovery.history],
+            "rekeyed": False, "old_session_invalidated": detected,
+            "detail": "A record was removed from an isolated copy. The checkpoint detected the missing record and blocked the chat; the live evidence remains intact.",
+        }
+        self.attacks.append(result_data)
+        self.events.extend([
+            _event("ATTACK", "12", "EVIDENCE DELETION SIMULATED", {
+                "removed_incident_id": removed.incident_id,
+                "original_record_count": checkpoint.record_count,
+                "altered_copy_count": len(altered_copy),
+            }, "The attacker removed the latest record from an isolated copy of the evidence chain."),
+            _event("VALIDATION", "13", "CHECKPOINT REJECTED DELETION", {
+                "detected": detected,
+                "trusted_checkpoint": asdict(checkpoint),
+                "altered_copy_valid": not detected,
+            }, "The copied chain can be internally valid after tail deletion, but its count and tip no longer match the saved checkpoint."),
+            _event("EVIDENCE", "14", "DELETION ATTEMPT RECORDED", {
+                "incident_id": record.incident_id,
+                "evidence_hash": record.evidence_hash,
+                "live_chain_valid": result_data["checkpoint_valid"],
+            }, "The live evidence chain retained its records and recorded this simulation."),
+            _event("RECOVERY", "15", "CHAT BLOCKED AFTER EVIDENCE DELETION", {
+                "state": self.recovery.state.value,
+                "history": result_data["recovery_history"],
+                "old_session_invalidated": detected,
+            }, "The chat cannot send or rekey after evidence integrity fails; start a new session."),
         ])
         return {**self.snapshot(), "attack": result_data}
 
@@ -247,6 +378,10 @@ class _Handler(SimpleHTTPRequestHandler):
     audit_logs: list[dict[str, object]] = []
     live_log_path = LIVE_LOG_PATH
     live_log_lock = Lock()
+
+    def end_headers(self) -> None:
+        self.send_header("Cache-Control", "no-store")
+        super().end_headers()
 
     def _log_request_json(self, method: str, path: str, status_code: int, duration_ms: float, client_ip: str, error: str | None = None) -> None:
         with self.live_log_lock:
@@ -323,6 +458,8 @@ class _Handler(SimpleHTTPRequestHandler):
                 response = self.controller.send(payload.get("message", ""), payload.get("sender", "alice"))
             elif parsed.path == "/api/attack":
                 response = self.controller.attack(payload.get("attack", ""))
+            elif parsed.path == "/api/recover":
+                response = self.controller.recover()
             else:
                 self.send_error(HTTPStatus.NOT_FOUND)
                 self._log_request_json("POST", parsed.path, HTTPStatus.NOT_FOUND, (perf_counter_ns() - start_time) / 1_000_000, client_ip, "endpoint not found")

@@ -2,3 +2,10 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .venv/
+.cipherchat-lab/
+.env
+.env.*
+!.env.example
+.lan-certs/
+.vscode/
+security_test_results/attack_simulation.json

@@ -57,11 +57,22 @@ The UI displays those actual bytes both split and combined.
 
 ## Attacks, evidence, and recovery
 
-Every attacker button calls the existing Python `AttackSimulator`; no UI attack
-logic is duplicated. The trace shows actual classification, evidence hash,
-checkpoint status, recovery history, and rekey/block result. Replay and
-tampering scenarios use the real recovery FSM and session rekeying. Key
-substitution uses the pinned-key check and reaches `BLOCKED`.
+Message attack buttons call the existing Python `AttackSimulator`. The trace
+shows actual classification, evidence hash, checkpoint status, and recovery
+history. A detected replay or tampering attempt quarantines the live chat and
+disables sending. **Verify and rekey chat** moves through verification and
+rekeying with fresh signed X25519 public keys, replaces both directional
+sessions, and resumes sending. A detected
+key substitution blocks the live chat; **new session** is required to resume.
+
+The attacker screen exposes all six message tampering fields. After an attack
+creates an evidence record, **delete evidence record (copy)** removes the latest
+record from an isolated copy and checks that copy against the saved checkpoint.
+The result shows the missing record count and detection; the live evidence is
+retained and the deletion attempt is recorded there. A detected deletion blocks
+the live chat and invalidates its sessions; **new session** is required to
+resume. This check relies on a checkpoint kept independently from the altered
+copy.
 
 The key-substitution view detects mismatch with an already trusted pin. It does
 not claim complete MITM prevention or safe first-contact key provisioning.

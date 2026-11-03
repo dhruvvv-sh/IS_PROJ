@@ -24,7 +24,7 @@ from cryptography import __version__ as cryptography_version
 from cipherchat.crypto.identity import Identity
 from cipherchat.crypto.key_exchange import public_key_bytes
 from cipherchat.protocol.messages import ReceiverSession, SenderSession, SessionInactiveError
-from cipherchat.protocol.session import SessionManager
+from cipherchat.protocol.session import SessionManager, rekey_pair
 from cipherchat.security.attacks import AttackType, KeySubstitutionError
 from cipherchat.security.evidence import EvidenceLog, verify_evidence_chain
 
@@ -266,8 +266,7 @@ def _access_control() -> CaseResult:
         except Exception:
             denied += 1
     old_sender, old_receiver = alice.sender, bob.receiver
-    alice.rekey(public_key_bytes(bob.identity.public_key), bob.identity.signing_public_key_bytes, session_id="access-control-2", context=b"access-control-2")
-    bob.rekey(public_key_bytes(alice.identity.public_key), alice.identity.signing_public_key_bytes, session_id="access-control-2", context=b"access-control-2")
+    rekey_pair(alice, bob, session_id="access-control-2", context=b"access-control-2")
     invalidated = 0
     try:
         old_sender.encrypt("should be denied")

@@ -63,6 +63,11 @@ nav { display: flex; flex-wrap: wrap; gap: 0 2ch; margin-top: 20px; }
 main { padding-block: 40px; }
 .screen-heading { padding-bottom: 20px; border-bottom: 1px dashed var(--dim); }
 .screen-heading .presence { margin-left: 4ch; }
+.chat-alert { margin-top: 20px; padding: 12px 2ch; border: 1px dashed var(--state); color: var(--state); }
+.chat-alert strong { font-weight: 400; }
+.chat-alert button { margin-left: 2ch; color: var(--state); text-decoration: underline; }
+.chat-alert button:hover { color: var(--ground); background: var(--state); }
+.composer button:disabled, .composer textarea:disabled { opacity: .45; cursor: not-allowed; }
 .conversation { min-height: 240px; padding-block: 20px; }
 .conversation .empty { margin-left: 4ch; }
 .message { margin-bottom: 20px; max-width: 76ch; }

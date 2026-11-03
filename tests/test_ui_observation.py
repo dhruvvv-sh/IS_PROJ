@@ -1,4 +1,5 @@
 import base64
+import pytest
 
 from cipherchat.ui.server import DemonstrationController
 
@@ -16,13 +17,22 @@ def test_normal_message_generates_actual_observation_events():
     assert encryption["data"]["nonce"] == base64.b64decode(result["message"]["nonce"]).hex()
 
 
-def test_attack_observations_use_simulator_evidence_and_recovery():
+def test_attack_quarantines_live_chat_until_verification_and_rekey():
     controller = DemonstrationController()
+    original_session_id = controller.session_id
+    original_sender = controller.alice_sessions.sender
+    original_key = original_sender.key
     result = controller.attack("replay")
     attack = result["attack"]
     assert attack["detected"] and attack["classification"] == "REPLAY"
     assert attack["evidence_generated"] and attack["checkpoint_valid"]
-    assert attack["rekeyed"] and attack["old_session_invalidated"]
+    assert attack["recovery_state"] == "QUARANTINED"
+    assert not attack["rekeyed"] and attack["old_session_invalidated"]
+    assert result["recovery"]["state"] == "QUARANTINED"
+    with pytest.raises(ValueError, match="quarantined"):
+        controller.send("cannot send")
+    with pytest.raises(ValueError, match="quarantined"):
+        controller.attack("tamper_nonce")
     assert result["attacks"] == [attack]
     assert result["attacks"][0]["timestamp"]
     names = [event["title"] for event in result["events"]]
@@ -30,17 +40,38 @@ def test_attack_observations_use_simulator_evidence_and_recovery():
     assert "INCIDENT EVIDENCE GENERATED" in names
     assert "RECOVERY STATE TRANSITIONS" in names
 
+    recovered = controller.recover()
+    assert recovered["recovery"]["state"] == "SECURE"
+    assert recovered["recovery"]["history"] == [
+        "SECURE", "SUSPECTED_ATTACK", "QUARANTINED", "VERIFYING", "REKEYING", "SECURE"
+    ]
+    assert recovered["session"]["session_id"] != original_session_id
+    assert controller.alice_sessions.sender.key != original_key
+    assert recovered["rekey"]["fresh_x25519"] is True
+    assert original_sender._active is False
+    assert recovered["attacks"][0]["rekeyed"] is True
+    assert controller.send("works after rekey")["plaintext"] == "works after rekey"
+
 
 def test_key_substitution_observation_shows_blocked_session():
-    result = DemonstrationController().attack("key_substitution")
+    controller = DemonstrationController()
+    result = controller.attack("key_substitution")
     assert result["attack"]["classification"] == "KEY_SUBSTITUTION"
     assert result["attack"]["recovery_state"] == "BLOCKED"
     assert not result["attack"]["rekeyed"]
+    assert result["recovery"]["state"] == "BLOCKED"
+    with pytest.raises(ValueError, match="blocked"):
+        controller.send("cannot send")
+    with pytest.raises(ValueError, match="quarantined"):
+        controller.recover()
+    assert controller.establish()["recovery"]["state"] == "SECURE"
+    assert controller.send("new session works")["plaintext"] == "new session works"
 
 
 def test_attack_history_is_exported_and_reset_with_the_session():
     controller = DemonstrationController()
     first = controller.attack("replay")["attack"]
+    controller.recover()
     second = controller.attack("tamper_nonce")["attack"]
 
     exported = controller.export_logs()
@@ -68,6 +99,49 @@ def test_ui_snapshot_exposes_delivery_hashes_and_verified_evidence_chain():
     assert attacked["evidence"]["checkpoint"]["record_count"] == 1
     assert attacked["evidence"]["records"][0]["attack_type"] == "TAMPERING"
     assert attacked["attack"]["evidence_hash"] == attacked["evidence"]["checkpoint"]["evidence_hash"]
+
+
+def test_ui_evidence_deletion_demo_detects_missing_record_and_preserves_live_chain():
+    controller = DemonstrationController()
+    with pytest.raises(ValueError, match="Run a message attack first"):
+        controller.attack("delete_evidence")
+
+    first = controller.attack("replay")
+    original = first["evidence"]["records"][0]
+    result = controller.attack("delete_evidence")
+    deletion = result["attack"]
+
+    assert deletion["attack_type"] == "EVIDENCE_DELETION"
+    assert deletion["detected"] is True
+    assert deletion["altered_copy_valid"] is False
+    assert deletion["original_record_count"] == 1
+    assert deletion["altered_copy_count"] == 0
+    assert deletion["removed_incident_id"] == original["incident_id"]
+    assert deletion["recovery_state"] == "BLOCKED"
+    assert deletion["old_session_invalidated"] is True
+    assert result["recovery"]["state"] == "BLOCKED"
+    assert result["evidence"]["records"][0] == original
+    assert result["evidence"]["checkpoint"]["record_count"] == 2
+    assert result["evidence"]["chain_valid"] is True
+    assert controller.export_logs()["attacks"][-1] == deletion
+    with pytest.raises(ValueError, match="blocked"):
+        controller.send("cannot send after deletion")
+    with pytest.raises(ValueError, match="quarantined"):
+        controller.recover()
+    assert controller.establish()["recovery"]["state"] == "SECURE"
+
+
+def test_evidence_deletion_blocks_a_recovered_chat_too():
+    controller = DemonstrationController()
+    controller.attack("replay")
+    controller.recover()
+    result = controller.attack("delete_evidence")
+    assert result["recovery"]["state"] == "BLOCKED"
+    assert result["attack"]["recovery_history"][-4:] == [
+        "SUSPECTED_ATTACK", "QUARANTINED", "VERIFYING", "BLOCKED"
+    ]
+    with pytest.raises(ValueError, match="blocked"):
+        controller.send("still blocked")
 
 
 def test_alice_and_bob_can_both_send_simple_messages():

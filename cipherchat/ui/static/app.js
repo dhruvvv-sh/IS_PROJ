@@ -29,6 +29,10 @@ function showModal(message) {
 function closeModal() { $('#system-modal').hidden = true; }
 
 function switchScreen(name) {
+  const allowed = state.role === 'alice' ? ['sender', 'administrative']
+    : state.role === 'bob' ? ['receiver', 'administrative']
+    : state.role === 'eva' ? ['attacker', 'administrative'] : null;
+  if (allowed && !allowed.includes(name)) name = allowed[0];
   $$('.screen').forEach(screen => { screen.hidden = screen.dataset.view !== name; });
   $$('[data-screen]').forEach(button => {
     if (button.dataset.screen === name) button.setAttribute('aria-current', 'page');
@@ -37,6 +41,20 @@ function switchScreen(name) {
   history.replaceState(null, '', `#${name}`);
   const labels = {sender: 'Alice', receiver: 'Bob', attacker: 'Attacker', administrative: 'Audit'};
   document.title = `CipherChat :: ${labels[name]}`;
+}
+
+function applyRole() {
+  const allowed = state.role === 'alice' ? ['sender', 'administrative']
+    : state.role === 'bob' ? ['receiver', 'administrative']
+    : state.role === 'eva' ? ['attacker', 'administrative'] : null;
+  if (!allowed) return;
+  $('.dateline').textContent = 'LAN LAB';
+  if (state.role === 'eva') {
+    $('[data-view="attacker"] .screen-heading .presence').textContent = 'controlled tests // local lab network';
+  }
+  $$('[data-screen]').forEach(button => { button.hidden = !allowed.includes(button.dataset.screen); });
+  const current = location.hash.slice(1);
+  if (!allowed.includes(current)) switchScreen(allowed[0]);
 }
 
 function conversationFor(viewer) {
@@ -72,8 +90,33 @@ function renderConversation() {
   }
 }
 
+function renderChatState() {
+  const status = state.recovery?.state || 'SECURE';
+  const unavailable = status !== 'SECURE' || Boolean(state.connection_error);
+  const message = state.connection_error ? 'RELAY DISCONNECTED // sending paused'
+    : status === 'WAITING' ? 'WAITING FOR PEER // sending will start when both connect'
+    : status === 'REKEYING' || status === 'VERIFYING' ? 'VERIFYING AND REKEYING // sending paused'
+    : status === 'QUARANTINED'
+    ? 'CHAT QUARANTINED // sending paused until verification and rekey'
+    : 'CHAT BLOCKED // start a new session to send again';
+  $$('[data-chat-alert]').forEach(alert => {
+    alert.hidden = !unavailable;
+    alert.querySelector('[data-chat-state]').textContent = unavailable ? message : '';
+    alert.querySelector('[data-recover]').hidden = status !== 'QUARANTINED' || Boolean(state.connection_error);
+  });
+  $$('.composer').forEach(form => {
+    form.querySelector('textarea').disabled = unavailable;
+    form.querySelector('button[type="submit"]').disabled = unavailable;
+  });
+  for (const [view, peer] of [['sender', 'Bob'], ['receiver', 'Alice']]) {
+    $(`[data-view="${view}"] .screen-heading .presence`).textContent = unavailable
+      ? `${status.toLowerCase()} // sending disabled`
+      : `connected to ${peer} // encrypted // signed`;
+  }
+}
+
 function renderAttack() {
-  const attack = state.attack;
+  const attack = state.attack || state.attacks?.at(-1);
   $('#attack-empty').hidden = Boolean(attack);
   $('#attack-result').hidden = !attack;
   if (!attack) return;
@@ -81,7 +124,10 @@ function renderAttack() {
     ['attack', attack.attack_type],
     ['detected', attack.detected ? 'yes' : 'no'],
     ['evidence', attack.evidence_generated ? short(attack.evidence_hash, 24) : 'not recorded'],
-    ['response', attack.rekeyed ? 'session rekeyed' : attack.recovery_state.toLowerCase()]
+    ['response', attack.attack_type === 'EVIDENCE_DELETION'
+      ? `checkpoint rejected ${attack.original_record_count} → ${attack.altered_copy_count} records // chat ${attack.recovery_state.toLowerCase()}`
+      : attack.rekeyed ? 'session rekeyed' : attack.recovery_state.toLowerCase()],
+    ['detail', attack.detail]
   ]);
 }
 
@@ -127,15 +173,17 @@ function renderEvidence() {
 }
 
 function render() {
+  applyRole();
+  renderChatState();
   renderConversation();
   renderAttack();
   renderEvents();
   renderEvidence();
 }
 
-function setState(nextState) {
+function setState(nextState, preserveSelection = false) {
   state = nextState;
-  selectedEvent = Math.max(0, (state.events || []).length - 1);
+  if (!preserveSelection) selectedEvent = Math.max(0, (state.events || []).length - 1);
   render();
 }
 
@@ -171,6 +219,12 @@ $$('[data-attack]').forEach(button => button.onclick = async () => {
   } catch (error) { showModal(error.message); }
 });
 
+$$('[data-recover]').forEach(button => button.onclick = async () => {
+  try {
+    setState(await api('/api/recover', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'}));
+  } catch (error) { showModal(error.message); }
+});
+
 $('#reset').onclick = async () => {
   try {
     setState(await api('/api/reset'));
@@ -193,3 +247,16 @@ const screen = ['sender', 'receiver', 'attacker', 'administrative'].includes(loc
   ? location.hash.slice(1) : 'sender';
 switchScreen(screen);
 api('/api/state').then(setState).catch(error => showModal(error.message));
+
+let polling = false;
+setInterval(async () => {
+  if (!state.role || polling) return;
+  polling = true;
+  try {
+    const next = await api('/api/state');
+    if (next.revision !== state.revision || next.connection_error !== state.connection_error) {
+      setState(next, true);
+    }
+  } catch (_) { /* The next successful poll refreshes the local UI. */ }
+  finally { polling = false; }
+}, 750);

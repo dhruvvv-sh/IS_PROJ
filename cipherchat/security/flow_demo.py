@@ -19,7 +19,7 @@ from uuid import uuid4
 from cipherchat.crypto.identity import Identity
 from cipherchat.crypto.key_exchange import public_key_bytes
 from cipherchat.protocol.messages import EncryptedMessage
-from cipherchat.protocol.session import SessionManager
+from cipherchat.protocol.session import SessionManager, rekey_pair
 from cipherchat.security.attacks import AttackType, classify_failure
 from cipherchat.security.evidence import EvidenceLog, verify_evidence_chain
 from cipherchat.security.recovery import RecoveryMachine, RecoveryState
@@ -386,7 +386,10 @@ class FlowDemonstration:
         if choice == "1":
             old_session = self.session_id
             self.recovery.verification_succeeded()
-            self._establish_new_session("incident-recovery")
+            self.session_generation += 1
+            self.session_id = f"cipherchat-{self.session_generation}-{uuid4()}"
+            self.context = f"cipherchat-flow:incident-recovery:generation-{self.session_generation}".encode()
+            rekey_pair(self.alice_sessions, self.bob_sessions, session_id=self.session_id, context=self.context)
             self.recovery.rekey_complete()
             self.last_message = None
             _status("Verification", "SUCCEEDED")

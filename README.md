@@ -26,6 +26,9 @@ material is included in that log.
 See [UI_OBSERVATION_GUIDE.md](UI_OBSERVATION_GUIDE.md) for the local
 cryptographic observation interface and its demonstration-mode boundaries.
 
+For Alice, Bob, and Eva on separate laptops, follow
+[MULTITERMINAL_GUIDE.md](MULTITERMINAL_GUIDE.md).
+
 ## Design
 
 The cryptographic path is **X25519 ECDH → HKDF-SHA-256 → AES-256-GCM →
@@ -54,4 +57,6 @@ Recovery only permits:
 `SECURE → SUSPECTED_ATTACK → QUARANTINED → VERIFYING → REKEYING → SECURE`
 
 Verification can instead lead to `BLOCKED`. There is no automatic retry loop;
-fresh ECDH material is required before resuming after rekeying.
+rekeying generates new X25519 key pairs on both sides. Each side signs its new
+public key, session ID, and context with its pinned Ed25519 identity before the
+new ECDH secret is used. Old session objects are invalidated on replacement.

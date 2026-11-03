@@ -12,7 +12,7 @@ from typing import Literal
 from cipherchat.crypto.identity import Identity
 from cipherchat.crypto.key_exchange import public_key_bytes
 from cipherchat.protocol.messages import EncryptedMessage, SessionInactiveError, ValidationError
-from cipherchat.protocol.session import SessionManager
+from cipherchat.protocol.session import SessionManager, rekey_pair
 from cipherchat.security.attacks import AttackType, classify_failure
 from cipherchat.security.evidence import EvidenceLog, verify_evidence_chain
 from cipherchat.security.recovery import RecoveryMachine, RecoveryState
@@ -167,8 +167,7 @@ class AttackSimulator:
         scenario.recovery.verification_succeeded()
         new_session_id = f"{scenario.session_id}-rekey"
         context = f"cipherchat-simulation:rekey:{label}".encode()
-        scenario.alice_sessions.rekey(public_key_bytes(scenario.bob.public_key), scenario.bob.signing_public_key_bytes, session_id=new_session_id, context=context)
-        scenario.bob_sessions.rekey(public_key_bytes(scenario.alice.public_key), scenario.alice.signing_public_key_bytes, session_id=new_session_id, context=context)
+        rekey_pair(scenario.alice_sessions, scenario.bob_sessions, session_id=new_session_id, context=context)
         scenario.recovery.rekey_complete()
         try:
             old_sender.encrypt("must not send")

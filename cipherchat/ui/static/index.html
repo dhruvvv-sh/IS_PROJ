@@ -27,6 +27,10 @@
         <h2>ALICE</h2>
         <p class="presence">connected to Bob // encrypted // signed</p>
       </header>
+      <div class="chat-alert" data-chat-alert hidden>
+        <strong data-chat-state></strong>
+        <button type="button" data-recover>verify and rekey chat</button>
+      </div>
 
       <section class="conversation" id="alice-conversation" aria-live="polite">
         <p class="empty">No messages yet.</p>
@@ -53,6 +57,10 @@
         <h2>BOB</h2>
         <p class="presence">connected to Alice // encrypted // signed</p>
       </header>
+      <div class="chat-alert" data-chat-alert hidden>
+        <strong data-chat-state></strong>
+        <button type="button" data-recover>verify and rekey chat</button>
+      </div>
 
       <section class="conversation" id="bob-conversation" aria-live="polite">
         <p class="empty">No messages yet.</p>
@@ -79,15 +87,25 @@
         <h2>ATTACKER</h2>
         <p class="presence">controlled tests // no external network</p>
       </header>
+      <div class="chat-alert" data-chat-alert hidden>
+        <strong data-chat-state></strong>
+        <button type="button" data-recover>verify and rekey chat</button>
+      </div>
 
       <section class="section-block">
         <h3>CHOOSE ATTACK</h3>
         <div class="command-list">
           <button type="button" data-attack="replay">replay message</button>
           <button type="button" data-attack="tamper_ciphertext">change ciphertext</button>
+          <button type="button" data-attack="tamper_nonce">change nonce</button>
+          <button type="button" data-attack="tamper_sequence_number">change sequence</button>
+          <button type="button" data-attack="tamper_message_id">change message ID</button>
+          <button type="button" data-attack="tamper_session_id">change session ID</button>
           <button type="button" data-attack="tamper_sender_id">forge sender</button>
           <button type="button" data-attack="key_substitution">replace peer key</button>
+          <button type="button" data-attack="delete_evidence">delete evidence record (copy)</button>
         </div>
+        <p class="presence">Run a message attack first to create an evidence record for the deletion demo.</p>
       </section>
 
       <section class="section-block">
