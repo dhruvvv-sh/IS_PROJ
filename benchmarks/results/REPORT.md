@@ -58,7 +58,7 @@ A PNG copy is also exported on macOS for slide editors.
 
 ![Wire overhead](wire_overhead.svg)
 
-For slide-by-slide definitions, speaker notes, and interpretation, see [PRESENTATION_GUIDE.md](PRESENTATION_GUIDE.md).
+For a plain-language full report, see [BENCHMARK_REPORT_SIMPLE.md](BENCHMARK_REPORT_SIMPLE.md). For slide-by-slide notes, see [PRESENTATION_GUIDE.md](PRESENTATION_GUIDE.md).
 
 ## Limitations
 

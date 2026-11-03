@@ -321,6 +321,84 @@ Both panels use the **same 0–350 µs horizontal scale**. Green is CipherChat; 
 """
 
 
+def simple_report(data, rows):
+    """A self-contained, plain-language report generated from measured data."""
+    env, params = data["environment"], data["parameters"]
+    lookup = {(row["system"], row["payload_bytes"]): row for row in rows}
+    c1, o1 = lookup[("CipherChat", 1024)], lookup[("Matrix Olm", 1024)]
+    c16, o16 = lookup[("CipherChat", 16384)], lookup[("Matrix Olm", 16384)]
+    setup = {system: [item["us"] for item in data["setup_samples"] if item["system"] == system]
+             for system in SYSTEMS[:2]}
+    lines = [
+        "# CipherChat benchmark: simple complete report", "",
+        f'**Run date:** {env["utc_time"]}  ',
+        f'**Machine:** {env["cpu"]}; {env["os"]}  ',
+        f'**Software:** Python {env["python"]}, cryptography {env["cryptography"]}, vodozemac {env["vodozemac"]}  ',
+        f'**Code revision:** `{env["git_commit"]}`', "",
+        "## 1. What did we want to learn?", "",
+        "We wanted to know how long CipherChat takes to protect and recover a message, how many bytes its message format adds, and how those measurements compare with an established encrypted-messaging implementation. We used Matrix Olm's Rust `vodozemac` implementation through Python bindings. A plain byte copy was measured as an **insecure control** to show a rough lower bound.", "",
+        "## 2. What did we actually measure?", "",
+        "![Benchmark procedure](benchmark_method.svg)", "",
+        f'The input was an ASCII message of **32 B, 1 KiB (1,024 B), or 16 KiB (16,384 B)**. Each system and size received **{params["warmup_per_round"]} untimed warm-up messages**, followed by **{params["iterations_per_round"]} timed messages** in each of **{params["rounds"]} rounds**. This gave **{params["iterations_per_round"] * params["rounds"]:,} individual timing samples** for every system and size. The run rotated which system went first and checked that every decrypted message matched its input. A separate batch measured throughput. Fresh-session setup was measured {params["setup_samples"]} times per encrypted system; CipherChat rekey was measured {params["setup_samples"]} times.', "",
+        "The timer starts before encryption and message serialization. A second timestamp separates the send and receive sides. It stops after parsing and decryption. **No browser, port 8000 server, socket, relay, LAN transfer, or disk write is in the timed message path.**", "",
+        "## 3. Terms used in the results", "",
+        "| Term | Simple meaning |", "| --- | --- |",
+        "| Payload | Original message size before protection. |",
+        "| Encrypt median | Typical time to encrypt **and serialize** one message; lower is faster. |",
+        "| Decrypt median | Typical time to parse **and decrypt** one message; lower is faster. |",
+        "| Round-trip median | Typical combined send-and-receive processing time in this one process. It does **not** mean internet round trip. |",
+        "| p95 | 95% of measured operations completed within this time; the slowest 5% took longer. It is not the maximum. |",
+        "| Throughput | Complete message operations per second in a separately timed batch; higher is faster. |",
+        "| Wire bytes | Size of the representation counted by this harness. |",
+        "| Overhead bytes | Wire bytes minus original payload bytes. |",
+        "| µs | Microsecond: one millionth of a second. 1,000 µs = 1 millisecond. |", "",
+        "Each median is computed independently. The displayed encrypt and decrypt medians therefore may differ slightly from the displayed combined median when added.", "",
+        "## 4. Complete warm-session results", "",
+        "| Payload | System | Encrypt (µs) | Decrypt (µs) | Combined median (µs) | Combined p95 (µs) | Throughput (msg/s) | Wire bytes | Overhead bytes |",
+        "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for row in rows:
+        lines.append(f'| {row["payload_bytes"]:,} | {row["system"]} | {row["encrypt_median_us"]:,.1f} | '
+                     f'{row["decrypt_median_us"]:,.1f} | {row["roundtrip_median_us"]:,.1f} | '
+                     f'{row["roundtrip_p95_us"]:,.1f} | {row["throughput_median_msg_s"]:,.1f} | '
+                     f'{row["wire_bytes_median"]:,} | +{row["overhead_bytes"]:,} |')
+    lines += ["", "## 5. Read the comparison graph", "",
+              "![Encryption and decryption comparison](encryption_decryption_comparison.svg)", "",
+              "**Green** means CipherChat and **blue** means Matrix Olm. Both panels use the same horizontal microsecond scale. A shorter bar means less measured time. The left panel is encryption plus serialization; the right is parsing plus decryption.", "",
+              f'- **32 B:** Fixed per-message work is large compared with the tiny payload. CipherChat takes {lookup[("CipherChat", 32)]["roundtrip_median_us"]:.1f} µs combined, while Olm takes {lookup[("Matrix Olm", 32)]["roundtrip_median_us"]:.1f} µs.',
+              f'- **1 KiB:** CipherChat takes {c1["roundtrip_median_us"]:.1f} µs combined versus Olm {o1["roundtrip_median_us"]:.1f} µs: about {c1["roundtrip_median_us"] / o1["roundtrip_median_us"]:.1f} times the measured time. Their p95 values are {c1["roundtrip_p95_us"]:.1f} and {o1["roundtrip_p95_us"]:.1f} µs.',
+              f'- **16 KiB:** CipherChat is faster **only for encrypting and serializing**: {c16["encrypt_median_us"]:.1f} versus Olm {o16["encrypt_median_us"]:.1f} µs. CipherChat is slower at parsing and decrypting: {c16["decrypt_median_us"]:.1f} versus {o16["decrypt_median_us"]:.1f} µs. Consequently Olm wins the **complete** operation: {o16["roundtrip_median_us"]:.1f} versus CipherChat {c16["roundtrip_median_us"]:.1f} µs.',
+              "", "The plaintext-copy control is much faster because it does not encrypt, authenticate, sign, or check replay. It is not a secure chat option.", "",
+              "### Other views of the same saved data", "",
+              "![Combined processing median](roundtrip_latency.svg)", "",
+              "This chart combines the send and receive sides; shorter bars mean a faster complete local operation.", "",
+              "![Representation overhead](wire_overhead.svg)", "",
+              "This chart shows the number of bytes beyond the plaintext size. It compares the harness's selected representations, not complete network packets.", "",
+              "## 6. Why might this have happened?", "",
+              "CipherChat builds message metadata, signs each encrypted message, Base64-encodes binary values, and writes a full JSON envelope. On receipt it parses JSON, decodes Base64, validates the envelope, verifies the Ed25519 signature, and decrypts. These steps are **plausible** contributors to the higher small-message and receive-side times. Olm's core is implemented in Rust, whereas CipherChat's protocol and JSON work run in Python with native cryptographic primitives.", "",
+              f'CipherChat’s 16 KiB JSON envelope is {c16["wire_bytes_median"]:,} bytes; Olm’s measured binary message body is {o16["wire_bytes_median"]:,} bytes. Base64 makes binary ciphertext larger when put into JSON. The harness counts **different serialization layers**: it does not include the full Matrix event JSON, so these figures cannot establish complete network-packet superiority.', "",
+              "The benchmark did not time JSON, signatures, AES, ratcheting, or language overhead separately. It therefore **cannot prove a single cause** for the timing gap or the 16 KiB send-side result.", "",
+              "## 7. Setup and rekey results", "",
+              "| Operation | Median (µs) | p95 (µs) |", "| --- | ---: | ---: |",
+    ]
+    for system in SYSTEMS[:2]:
+        values = setup[system]
+        lines.append(f'| {system} fresh conversation | {statistics.median(values):,.1f} | {p95(values):,.1f} |')
+    values = data["rekey_samples"]
+    lines += [f'| CipherChat signed two-party rekey | {statistics.median(values):,.1f} | {p95(values):,.1f} |',
+              "", "CipherChat setup creates two identities and pinned sessions. Olm setup creates accounts, a pre-key message, and an acknowledgement. Those are different procedures; their times are not directly equivalent. CipherChat rekey timing excludes transport delay and the follow-up test message.", "",
+              "## 8. What does this mean for the project?", "",
+              "The result suggests profiling CipherChat’s receive path, JSON parsing, Base64 conversions, and per-message signing and verification. A compact encoding might reduce bytes, but its benefit must be measured after implementation. For a stronger comparison, measure both complete network formats and separately time the full port 8000 user experience. These measurements describe one host and this specific run, not a universal speed ranking or a security ranking.", "",
+              "## 9. Reproduce and inspect the evidence", "",
+              "```bash", "python3 -m venv benchmarks/.venv",
+              "benchmarks/.venv/bin/python -m pip install -r benchmarks/requirements.txt",
+              "benchmarks/.venv/bin/python benchmarks/run.py", "```", "",
+              "The generated files are [summary.csv](summary.csv) (table), [results.json](results.json) (raw timings), [encryption_decryption_comparison.svg](encryption_decryption_comparison.svg) (main chart), [benchmark_method.svg](benchmark_method.svg) (method diagram), [roundtrip_latency.svg](roundtrip_latency.svg), and [wire_overhead.svg](wire_overhead.svg). The [presentation guide](PRESENTATION_GUIDE.md) gives a slide-by-slide script.", "",
+              "The comparator sources are [vodozemac Python bindings](https://github.com/matrix-nio/vodozemac-python) and [Matrix vodozemac](https://github.com/matrix-org/vodozemac).", "",
+    ]
+    return "\n".join(lines)
+
+
 def report(data, rows):
     env, params = data["environment"], data["parameters"]
     lines = ["# CipherChat performance benchmark", "", f'Run: {env["utc_time"]} · commit `{env["git_commit"]}`', "",
@@ -365,7 +443,7 @@ def report(data, rows):
               "", "A PNG copy is also exported on macOS for slide editors.",
               "", "![Benchmark measurement flow](benchmark_method.svg)",
               "", "![Round-trip latency](roundtrip_latency.svg)", "", "![Wire overhead](wire_overhead.svg)",
-              "", "For slide-by-slide definitions, speaker notes, and interpretation, see [PRESENTATION_GUIDE.md](PRESENTATION_GUIDE.md).",
+              "", "For a plain-language full report, see [BENCHMARK_REPORT_SIMPLE.md](BENCHMARK_REPORT_SIMPLE.md). For slide-by-slide notes, see [PRESENTATION_GUIDE.md](PRESENTATION_GUIDE.md).",
               "", "## Limitations", "", "- This is one host and one Python process; measure real LAN and UI latency separately.",
               "- Olm uses a ratchet; CipherChat uses a fixed session key until explicit rekey and signs each message. These are different feature sets.",
               "- Olm wire bytes are the binary protocol body and exclude Matrix event JSON and transport metadata. CipherChat bytes are its full JSON envelope. No complete product-size ranking follows from this comparison.",
@@ -405,6 +483,7 @@ def main():
     export_png_if_available(args.output / "benchmark_method.svg")
     (args.output / "REPORT.md").write_text(report(data, rows), encoding="utf-8")
     (args.output / "PRESENTATION_GUIDE.md").write_text(presentation_guide(data, rows), encoding="utf-8")
+    (args.output / "BENCHMARK_REPORT_SIMPLE.md").write_text(simple_report(data, rows), encoding="utf-8")
     print(f"Report: {args.output / 'REPORT.md'}")
 
 

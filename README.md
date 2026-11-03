@@ -32,6 +32,8 @@ For Alice, Bob, and Eva on separate laptops, follow
 For the reproducible CipherChat/Matrix Olm performance comparison, see
 [benchmarks/results/REPORT.md](benchmarks/results/REPORT.md) and
 [benchmarks/run.py](benchmarks/run.py).
+For a plain-language walkthrough of every benchmark result, see
+[benchmarks/results/BENCHMARK_REPORT_SIMPLE.md](benchmarks/results/BENCHMARK_REPORT_SIMPLE.md).
 
 ## Design
 
